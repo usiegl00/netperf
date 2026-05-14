@@ -1,6 +1,6 @@
 [package]
 name = "netperf"
-version = "0.2.8"
+version = "0.2.9"
 description = "A network performance measurement tool"
 authors = ["Ahmed Farghal <me@asoli.dev>"]
 edition = "2021"
@@ -12,19 +12,19 @@ readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-anyhow = "1.0.68"
-colored = "3.0.0"
+anyhow = "1"
+colored = "3.1"
 env_logger = "0.11.8"
 log = "0.4.17"
-nix = "0.30.1"
+nix = "0.31.3"
 bytes = "1.4.0"
 clap-verbosity-flag = "3.0.2"
-futures = "0.3.26"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.91"
-thiserror = "2.0.12"
-cling = { version = "0.1.0" }
-tokio = { version = "1.44.2", features = [
+futures = "0.3.32"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0"
+cling = { version = "0.1" }
+tokio = { version = "1.52", features = [
   "rt",
   "rt-multi-thread",
   "net",
@@ -34,10 +34,10 @@ tokio = { version = "1.44.2", features = [
   "fs",
   "io-util",
 ] }
-uuid = { version = "1.3.0", default-features = false, features = ["v4"] }
-clap = { version = "4.1.4", features = ["color", "derive"] }
+uuid = { version = "1.23", default-features = false, features = ["v4"] }
+clap = { version = "4.6.1", features = ["color", "derive"] }
 
 [dev-dependencies]
 pretty_assertions = "1.3.0"
-tokio = { version = "1.25.0", features = ["test-util"] }
+tokio = { version = "1.52", features = ["test-util"] }
 tokio-stream = "0.1.17"
