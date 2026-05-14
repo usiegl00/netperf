@@ -118,26 +118,26 @@ pub fn print_summary(
         // find the remote counterpart. This is only valuable if we are not using
         // bidirectional streams. In bidirectional streams we already have the sender
         // and receiving data.
-        if *direction != Direction::Bidirectional {
-            if let Some(remote_stats) = remote_results.streams.get(id) {
-                print_stats(
-                    Some(*id),
-                    0,
-                    remote_stats.duration_millis,
-                    remote_stats.bytes_transferred,
-                    remote_stats.sender,
-                    remote_stats.syscalls,
-                    0,
-                );
-                if remote_stats.sender {
-                    sender_bytes_transferred += remote_stats.bytes_transferred;
-                    sender_duration_millis =
-                        std::cmp::max(sender_duration_millis, remote_stats.duration_millis);
-                } else {
-                    receiver_bytes_transferred += remote_stats.bytes_transferred;
-                    receiver_duration_millis =
-                        std::cmp::max(receiver_duration_millis, remote_stats.duration_millis);
-                }
+        if *direction != Direction::Bidirectional
+            && let Some(remote_stats) = remote_results.streams.get(id)
+        {
+            print_stats(
+                Some(*id),
+                0,
+                remote_stats.duration_millis,
+                remote_stats.bytes_transferred,
+                remote_stats.sender,
+                remote_stats.syscalls,
+                0,
+            );
+            if remote_stats.sender {
+                sender_bytes_transferred += remote_stats.bytes_transferred;
+                sender_duration_millis =
+                    std::cmp::max(sender_duration_millis, remote_stats.duration_millis);
+            } else {
+                receiver_bytes_transferred += remote_stats.bytes_transferred;
+                receiver_duration_millis =
+                    std::cmp::max(receiver_duration_millis, remote_stats.duration_millis);
             }
         }
     }
