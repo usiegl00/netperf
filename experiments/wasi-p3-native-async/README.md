@@ -7,11 +7,13 @@ poll-based `wasm32-wasip2` + tokio build in the parent crate.
 
 ## Layout
 - `p3echo/` — the guest. A `cdylib` built for `wasm32-wasip2` (auto-componentized),
-  using `wit-bindgen`'s async codegen against WASI 0.3 sockets. Modes (argv[1]):
-  - `sink` — listen, accept, drain a stream, report bytes/throughput.
-  - `source [block] [secs]` — connect, stream bulk data, report throughput +
-    per-write-stall percentiles.
-  - `conn` / `send1` — minimal connect / small-send smoke tests.
+  using `wit-bindgen`'s async codegen against WASI 0.3 sockets, with a netperf-style
+  clap CLI:
+  - `-s, --server` — listen for one connection.
+  - `-c, --client <HOST>` — connect to HOST.
+  - `-p, --port`, `-t, --time <secs>`, `-l, --length <bytes>` (block size).
+  - `-R, --reverse` — server sends, client receives.
+  - `--bidir` — both ends send and receive.
   - `wit/` is wasmtime's vendored WASI 0.3 WIT (must match the runtime's exact
     `0.3.x-rc` version; the published registry `0.3.0` does **not** match).
 - `p3host/` — a minimal embedding (~40 lines) that wires both `wasmtime_wasi::p2`
@@ -21,14 +23,18 @@ poll-based `wasm32-wasip2` + tokio build in the parent crate.
 
 ## Build & run
 ```
-# guest (needs the wasm32-wasip2 target)
-(cd p3echo && cargo build --release --target wasm32-wasip2)
-# host (needs wasmtime + wasmtime-wasi with the `p3` feature)
-(cd p3host && cargo build --release)
+(cd p3echo && cargo build --release --target wasm32-wasip2)   # guest
+(cd p3host && cargo build --release)                          # host (wasmtime-wasi `p3` feature)
 
 ECHO=p3echo/target/wasm32-wasip2/release/p3echo.wasm
-p3host/target/release/p3host "$ECHO" sink &
-p3host/target/release/p3host "$ECHO" source 2097152 5
+HOST=p3host/target/release/p3host
+
+# forward (client -> server)
+"$HOST" "$ECHO" -s &
+"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -l 2097152
+# reverse (server -> client): pass -R to both; -t goes on the sending side (server)
+"$HOST" "$ECHO" -s -R -t 5 &
+"$HOST" "$ECHO" -c 127.0.0.1 -R
 ```
 
 ## Measured result (loopback, single stream)
@@ -36,3 +42,14 @@ At equal block size the native-async path matches small-block throughput with a 
 tighter latency tail, and at large blocks (2 MiB) roughly doubles throughput vs the
 poll-based tokio path — because the host pipes a stream to TCP in batched copies
 instead of crossing the guest/host boundary with a poll-readiness cycle per write.
+
+## Status / limitations (prototype)
+- **No control protocol yet.** The two ends are launched manually and must be given
+  matching direction flags; test duration (`-t`) applies to the *sending* side (the
+  receiver drains until the peer closes). A real port needs the handshake +
+  parameter negotiation from the parent crate's `control.rs`/`net_utils.rs`.
+- **Single connection.** No `-P` parallel streams yet.
+- **`--bidir` is functional but unfair.** Both directions transfer, but in the
+  single-threaded cooperative executor whichever side receives fast starves its own
+  sender (a self-reinforcing asymmetry), so one direction collapses to a fraction of
+  line rate. A fair scheduler / explicit pacing between the two directions is needed.
