@@ -1,2 +1,12 @@
 /target
+target/
+**/target/
 .DS_Store
+__pycache__/
+*.pyc
+
+# Generated profiling/benchmark artifacts (regenerable; may embed local paths)
+*.svg
+*.folded
+wasmtime*.json
+perf-*.map

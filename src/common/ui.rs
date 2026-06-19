@@ -2,17 +2,17 @@ use crate::common::control::TestResults;
 use crate::common::data::Direction;
 use colored::Colorize;
 
-// Bytes
-const KBYTES: usize = 1024;
-const MBYTES: usize = 1024 * KBYTES;
-const GBYTES: usize = 1024 * MBYTES;
-const TBYTES: usize = 1024 * GBYTES;
+// Bytes (u64 so the TiB/Tbit tiers don't overflow a 32-bit usize on wasm targets)
+const KBYTES: u64 = 1024;
+const MBYTES: u64 = 1024 * KBYTES;
+const GBYTES: u64 = 1024 * MBYTES;
+const TBYTES: u64 = 1024 * GBYTES;
 
 // Bitrates
-const KBITS: usize = 1000;
-const MBITS: usize = 1000 * KBITS;
-const GBITS: usize = 1000 * MBITS;
-const TBITS: usize = 1000 * GBITS;
+const KBITS: u64 = 1000;
+const MBITS: u64 = 1000 * KBITS;
+const GBITS: u64 = 1000 * MBITS;
+const TBITS: u64 = 1000 * GBITS;
 
 pub fn print_header() {
     println!("[ ID]   Interval          Transfer      Bitrate");
@@ -23,7 +23,7 @@ pub fn print_server_banner(port: u16) {
     println!("--------------------------------------");
 }
 
-pub fn humanize_bytes(bytes: usize) -> String {
+pub fn humanize_bytes(bytes: u64) -> String {
     if bytes < KBYTES {
         format!("{} B", bytes)
     } else if bytes < MBYTES {
@@ -37,7 +37,7 @@ pub fn humanize_bytes(bytes: usize) -> String {
     }
 }
 
-pub fn humanize_bitrate(bytes: usize, duration_millis: u64) -> String {
+pub fn humanize_bitrate(bytes: u64, duration_millis: u64) -> String {
     // For higher accuracy we are getting the actual millis of the duration rather than the
     // rounded seconds.
     let bits = bytes * 8;
@@ -60,9 +60,9 @@ pub fn print_stats(
     id: Option<usize>,
     offset_from_start_millis: u64,
     duration_millis: u64,
-    bytes_transferred: usize,
+    bytes_transferred: u64,
     sender: bool,
-    _syscalls: usize,
+    _syscalls: u64,
     _block_size: usize,
 ) {
     let end_point = offset_from_start_millis + duration_millis;
@@ -162,6 +162,84 @@ pub fn print_summary(
             0,
             0,
         );
+    }
+}
+
+fn humanize_ns(ns: u64) -> String {
+    if ns < 1_000 {
+        format!("{} ns", ns)
+    } else if ns < 1_000_000 {
+        format!("{:.2} µs", ns as f64 / 1_000.0)
+    } else if ns < 1_000_000_000 {
+        format!("{:.2} ms", ns as f64 / 1_000_000.0)
+    } else {
+        format!("{:.2} s", ns as f64 / 1_000_000_000.0)
+    }
+}
+
+fn humanize_bps(bps: u64) -> String {
+    let b = bps as f64;
+    if b < 1e3 {
+        format!("{:.0} bits/sec", b)
+    } else if b < 1e6 {
+        format!("{:.2} Kbits/sec", b / 1e3)
+    } else if b < 1e9 {
+        format!("{:.2} Mbits/sec", b / 1e6)
+    } else {
+        format!("{:.2} Gbits/sec", b / 1e9)
+    }
+}
+
+/// Latency-under-load report: per-stream percentiles for the write-stall / arrival-gap
+/// (the queuing delay the data experiences) plus goodput-window stability.
+pub fn print_latency_summary(local: &TestResults, remote: &TestResults) {
+    use std::collections::BTreeSet;
+    let any = |r: &TestResults| r.streams.values().any(|s| s.latency.is_some());
+    if !any(local) && !any(remote) {
+        return;
+    }
+    println!("- - - - - - - - - latency under load - - - - - - - - -");
+    let ids: BTreeSet<usize> = local
+        .streams
+        .keys()
+        .chain(remote.streams.keys())
+        .copied()
+        .collect();
+    for id in ids {
+        for results in [local, remote] {
+            let Some(stats) = results.streams.get(&id) else {
+                continue;
+            };
+            let Some(lat) = &stats.latency else { continue };
+            let what = if stats.sender {
+                "write-stall  (sender)  "
+            } else {
+                "arrival-gap  (receiver)"
+            };
+            let d = &lat.interval_ns;
+            println!(
+                "[{:>3}] {}  min {}  p50 {}  p90 {}  p99 {}  p100 {}  mean {}",
+                id,
+                what,
+                humanize_ns(d.min),
+                humanize_ns(d.p50),
+                humanize_ns(d.p90),
+                humanize_ns(d.p99),
+                humanize_ns(d.p100),
+                humanize_ns(d.mean),
+            );
+            let t = &lat.throughput_bps;
+            println!(
+                "      goodput/10ms          min {}  p50 {}  p99 {}  max {}   [n={}, clock~{}, warmup-drop={}]",
+                humanize_bps(t.min),
+                humanize_bps(t.p50),
+                humanize_bps(t.p99),
+                humanize_bps(t.p100),
+                d.count,
+                humanize_ns(lat.clock_baseline_ns),
+                lat.warmup_discarded,
+            );
+        }
     }
 }
 

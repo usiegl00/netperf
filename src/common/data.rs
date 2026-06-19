@@ -29,6 +29,8 @@ pub struct TestParameters {
     pub client_version: String,
     pub no_delay: bool,
     pub socket_buffers: Option<usize>,
+    /// Collect latency-under-load correlates (write-stall / arrival-gap / goodput windows).
+    pub measure_latency: bool,
 }
 
 impl TestParameters {
@@ -49,6 +51,7 @@ impl TestParameters {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             no_delay: opts.no_delay,
             socket_buffers: opts.socket_buffers,
+            measure_latency: opts.latency,
         }
     }
 }
