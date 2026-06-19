@@ -1,0 +1,13 @@
+[package]
+name = "p3echo"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.58", features = ["async-spawn"] }
+
+[profile.release]
+opt-level = "s"
