@@ -195,6 +195,12 @@ What this says:
 These p3 numbers are **after** the host was switched to a single-threaded tokio runtime —
 see [Optimizing the p3 host](#optimizing-the-p3-host) for how the flamegraph drove that.
 
+> **Pending re-measure:** the p3 column above was taken with the guest built at
+> `opt-level=s`. It now ships at `opt-level=3`, which an interleaved comparison showed is
+> **~12% faster at 128 B** (neutral at ≥64 KiB) — enough to erase the small-block gap, so
+> the 128 B "p2 +6%" verdict likely becomes a tie or a slight p3 lead. A clean refresh of
+> the absolute table is pending (it needs an uncontended machine).
+
 **Machine / build (for reference):** Apple M1 Max, performance cores at 3.23 GHz
 (single-threaded — wasip2 has no threads, so one P-core), macOS; `wasmtime 45.0.2`,
 `wasm32-wasip2`. Loopback only — no NIC in the path. Absolute numbers are machine- and
