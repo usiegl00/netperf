@@ -145,12 +145,29 @@ bash tools/run.sh -t 10 -P 16 -l 16384 --bidir
 
 Map: `-l` small ≈ small commands/replies; `--bidir` ≈ requests up + replies down;
 `-P N` high ≈ many concurrent client connections; `-L` ≈ the tail-latency you actually
-care about. Caveats: with no `TCP_NODELAY`, Nagle stays on, so small back-to-back writes
-may coalesce more than real Redis (which sets nodelay) — though on **loopback** Nagle
-rarely engages (ACKs return in microseconds), so it barely affects these numbers; it only
-distorts results over a real-RTT link. And `--bidir` here is symmetric full-duplex,
-whereas a single Redis connection is serialized ping-pong — the *aggregate* NIC view
-across many connections is the part that lines up.
+care about.
+
+**Read ops/sec, not Gbit/s.** At 128-byte blocks this moves "only" a few hundred Mbit/s
+— that's expected, not a defect. The workload is **operation-rate bound, not bandwidth
+bound**: a single stream sustains roughly **0.7–0.8 million socket writes/sec** (each a
+`wasi:sockets` host-boundary call at ~1.2 µs), and 0.8M × 128 B simply isn't many bytes.
+Real Redis is the same — an instance doing ~1M GET/SETs/sec also pushes only a few
+hundred Mbit/s. The Redis-relevant number is **ops/sec** (`MiB/s ÷ block size`), which is
+genuinely server-class on one core. (Throughput climbs to tens of Gbit/s as `-l` grows
+and per-op cost amortizes; ~64 KiB is the sweet spot before copy/buffer effects bite.)
+
+**p2 wins this regime, not p3.** Counterintuitively, the poll-based p2 backend beats the
+native-async p3 backend on small messages (~755 vs ~632 Mbit/s single-stream at 128 B),
+because p3's async-stream/component-model machinery costs more *per operation*. p3 only
+pulls ahead once blocks are large enough to amortize that — there's a crossover around
+tens of KiB. See `crates/netperf-p3/README.md` for the numbers.
+
+Caveats: with no `TCP_NODELAY`, Nagle stays on, so small back-to-back writes may coalesce
+more than real Redis (which sets nodelay) — though on **loopback** Nagle rarely engages
+(ACKs return in microseconds), so it barely affects these numbers; it only distorts
+results over a real-RTT link. And `--bidir` here is symmetric full-duplex, whereas a
+single Redis connection is serialized ping-pong — the *aggregate* NIC view across many
+connections is the part that lines up.
 
 ### License
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.

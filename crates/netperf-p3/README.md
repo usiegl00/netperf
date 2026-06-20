@@ -52,10 +52,29 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 ```
 
 ## Measured result (loopback, single stream)
-At equal block size the native-async path matches small-block throughput with a far
-tighter latency tail, and at large blocks (2 MiB) roughly doubles throughput vs the
-poll-based tokio path — because the host pipes a stream to TCP in batched copies
-instead of crossing the guest/host boundary with a poll-readiness cycle per write.
+There is a **crossover** between the two backends, set by block size:
+
+| Block size | p2 (poll + tokio) | p3 (native async) |
+|---|---:|---:|
+| 128 B   | ~755 Mbit/s (~738K ops/s) | ~632 Mbit/s (~617K ops/s) |
+| 64 KiB  | ~59 Gbit/s | ~65 Gbit/s |
+
+- **Small blocks → p2 is faster.** Each write here threads through the async `stream<u8>`
+  state machine and the component-model async ABI, whose per-operation cost is *higher*
+  than p2's tight poll loop. At 128-byte granularity that overhead dominates, so the
+  native-async path is ~15–20% slower, not faster. (Both numbers above measure with
+  per-block latency timing on, since p3 always collects it — see below.)
+- **Large blocks → p3 is faster.** The host pipes the stream to TCP in batched copies
+  instead of crossing the guest/host boundary with a poll-readiness cycle per write, so
+  the per-op cost is amortized over a big payload and p3 pulls ahead.
+
+The native-async win is therefore about *amortized batching at scale*, not lower per-op
+cost — so it does not help the small-message (e.g. Redis-like) regime.
+
+> Note: p3 currently measures write-stall latency on **every** block unconditionally
+> (there is no `-L` toggle), which adds a clock read per write. On wasip2 a clock read is
+> a host-boundary call, so at tiny block sizes this is a real tax; the p2 comparison above
+> is run with `-L` to match it.
 
 ## Status / limitations (prototype)
 - **Control protocol: client-driven, with results exchange.** Only the client is
