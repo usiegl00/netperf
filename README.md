@@ -84,6 +84,18 @@ Prerequisites: build the p2 wasm first (`cargo build -p netperf-p2 --release --t
 wasm32-wasip2`) and `cargo install inferno`. Open the resulting `.svg` in a browser — it's
 a normal zoomable flamegraph.
 
+**p3 flamegraphs.** `tools/p3-flamegraph.sh` does the same for the p3 backend, but drives
+the custom embedding (`netperf-p3-host`) and sets `NETPERF_PERFMAP=1` so the host emits a
+perfmap for its JIT'd guest frames (the `wasmtime` CLI's `--profile=perfmap` isn't
+available here). Same pass-through-flags / per-scenario-SVG behavior:
+```
+! bash tools/p3-flamegraph.sh                  # default: -t 10 -P 1 -l 128 (per-op bound)
+! bash tools/p3-flamegraph.sh -t 10 -l 1048576 # large-block (batched-copy regime)
+```
+For a quick **user-space-only** view without root, `sample <pid>` works on a running
+client (the perfmap's absolute addresses line up with the same process). This is how the
+[p3 host optimization](#optimizing-the-p3-host) was found.
+
 **Kernel symbols.** macOS ships a sparse kernel symbol table, so kernel frames show as
 large `+offsets` by default. For accurate kernel names, install the matching Kernel
 Debug Kit (KDK) for your build (`sw_vers -buildVersion`), then re-symbolicate the *last*
@@ -107,29 +119,51 @@ at these rates is noisy); small-block rows are op-rate bound and stable.
 
 | Block size | p2 (poll + tokio) | p3 (native async) | Winner |
 |---|---:|---:|---:|
-| 128 B (`-L` off) | ~756 Mbit/s (~738K ops/s) | ~756 Mbit/s (~738K ops/s) | **tie** |
-| 128 B (`-L` on)  | ~747 Mbit/s | ~625 Mbit/s | **p2** |
-| 64 KiB           | ~59 Gbit/s  | ~70 Gbit/s  | **p3** (+18%) |
-| 1 MiB            | ~58 Gbit/s  | ~105 Gbit/s | **p3** (~2×) |
+| 128 B (`-L` off) | ~860 Mbit/s (~840K ops/s) | ~810 Mbit/s (~790K ops/s) | p2 +6% |
+| 128 B (`-L` on)  | ~788 Mbit/s | ~665 Mbit/s | p2 |
+| 64 KiB           | ~61 Gbit/s  | ~76 Gbit/s  | **p3** (+25%) |
+| 1 MiB            | ~57 Gbit/s  | ~114 Gbit/s | **p3** (~2×) |
 
 What this says:
 
-- **There is a crossover, set by block size.** At small blocks the two backends are
-  **tied** — both are operation-rate bound (~738K socket ops/sec on one core), and the
-  per-op cost of p3's async-stream/component-model machinery roughly equals p2's poll
-  loop. As blocks grow, p3 pulls away: the host pipes the `stream<u8>` to TCP in batched
-  copies instead of crossing the guest/host boundary per write, so its win scales with
-  block size (≈2× at 1 MiB).
+- **There is a crossover, set by block size.** At small blocks the two are close, with p2
+  marginally ahead — both are operation-rate bound (~0.8M socket ops/sec on one core), and
+  the per-op cost of p3's async-stream/component-model machinery slightly exceeds p2's
+  poll loop. As blocks grow, p3 pulls away: the host pipes the `stream<u8>` to TCP in
+  batched copies instead of crossing the guest/host boundary per write, so its win scales
+  with block size (≈2× at 1 MiB).
 - **p3's latency instrumentation is expensive; p2's is nearly free.** Turning on `-L`
-  (a clock read per block) costs p2 ~1% but p3 ~17% at 128 B. On wasip2 a clock read is a
-  host-boundary call, and p3's per-block path is more sensitive to it. So *with latency
-  measurement on*, p2 wins the small-block regime — but that's an artifact of the
-  measurement, not the data plane. (`-L` is off by default on both.)
+  (a clock read per block) costs p2 ~1% but p3 ~18% at 128 B. On wasip2 a clock read is a
+  host-boundary call, and p3's per-block path is more sensitive to it. (`-L` is off by
+  default on both.)
+
+These p3 numbers are **after** the host was switched to a single-threaded tokio runtime —
+see [Optimizing the p3 host](#optimizing-the-p3-host) for how the flamegraph drove that.
 
 **Machine / build (for reference):** Apple M1 Max, performance cores at 3.23 GHz
 (single-threaded — wasip2 has no threads, so one P-core), macOS; `wasmtime 45.0.2`,
 `wasm32-wasip2`. Loopback only — no NIC in the path. Absolute numbers are machine- and
-runtime-specific; the **p2-vs-p3 ratios** are the portable takeaway.
+runtime-specific (loopback throughput drifts ±10% run-to-run); the **p2-vs-p3 ratios** are
+the portable takeaway.
+
+### Optimizing the p3 host
+
+A combined kernel/host/guest profile of the 128-byte sender (`tools/p3-flamegraph.sh`, or
+`sample` for a quick user-space view) showed two things:
+
+1. **The host ran a multi-threaded tokio runtime for a single-threaded workload.** The
+   guest is single-threaded (wasip2) and wasmtime drives it on the calling thread, so the
+   extra workers just sat parked in `__psynch_cvwait` and added cross-thread I/O-driver
+   wakeups (`mach_msg`, `kevent`) on every hand-off. Switching `netperf-p3-host` to
+   `#[tokio::main(flavor = "current_thread")]` lifted throughput **~7–8% across all block
+   sizes** (128 B 756→810 Mbit/s, 1 MiB 105→114 Gbit/s) with no regression — this is the
+   one win fully under our control, and it's applied.
+2. **The remaining per-op cost is wasmtime's component-model async-stream machinery**, not
+   our code: a host-task create/delete cycle per `stream` write, `guest_write` /
+   `set_consumer` / `poll_consume`, TLS and resource-table lookups, bounds checks, plus
+   `memmove` and allocator churn. This is inherent to crossing the component-model async
+   ABI per write, so it only amortizes as blocks grow — which is exactly why p3 trails at
+   128 B and wins ~2× at 1 MiB. Reducing it would mean changes inside wasmtime, not here.
 
 ## CLI (both backends)
 
@@ -188,10 +222,10 @@ hundred Mbit/s. The Redis-relevant number is **ops/sec** (`MiB/s ÷ block size`)
 genuinely server-class on one core. (Throughput climbs to tens of Gbit/s as `-l` grows
 and per-op cost amortizes; ~64 KiB is the sweet spot before copy/buffer effects bite.)
 
-**Both backends are tied here — don't expect p3 to win.** On small messages p2 (poll) and
-p3 (native async) sustain the same ~756 Mbit/s / ~738K ops/sec: both are operation-rate
-bound and p3's async-stream machinery costs about as much per-op as p2's poll loop. p3
-only pulls ahead once blocks are large enough to amortize that (≈2× at 1 MiB). See the
+**Don't expect p3 to win here.** On small messages p2 (poll) and p3 (native async) are
+close — both ~0.8M ops/sec, operation-rate bound — with p2 marginally ahead, because p3's
+async-stream machinery costs slightly more per-op than p2's poll loop. p3 only pulls ahead
+once blocks are large enough to amortize that (≈2× at 1 MiB). See the
 [Benchmark results](#benchmark-results-p2-vs-p3) section for the full table and caveats.
 
 Caveats: with no `TCP_NODELAY`, Nagle stays on, so small back-to-back writes may coalesce

@@ -60,19 +60,27 @@ trials):
 
 | Block size | p2 (poll + tokio) | p3 (native async) |
 |---|---:|---:|
-| 128 B (`-L` off) | ~756 Mbit/s | ~756 Mbit/s (tie) |
-| 64 KiB  | ~59 Gbit/s | ~70 Gbit/s (+18%) |
-| 1 MiB   | ~58 Gbit/s | ~105 Gbit/s (~2×) |
+| 128 B (`-L` off) | ~860 Mbit/s | ~810 Mbit/s (p2 +6%) |
+| 64 KiB  | ~61 Gbit/s | ~76 Gbit/s (+25%) |
+| 1 MiB   | ~57 Gbit/s | ~114 Gbit/s (~2×) |
 
-- **Small blocks → tied.** Both backends are operation-rate bound (~738K socket ops/sec
-  on one core); the per-op cost of p3's async `stream<u8>` state machine and the
-  component-model async ABI is about the same as p2's tight poll loop.
+- **Small blocks → p2 marginally ahead.** Both backends are operation-rate bound (~0.8M
+  socket ops/sec on one core); the per-op cost of p3's async `stream<u8>` state machine and
+  the component-model async ABI is slightly higher than p2's tight poll loop.
 - **Large blocks → p3 wins, and the win scales with block size.** The host pipes the
   stream to TCP in batched copies instead of crossing the guest/host boundary with a
   poll-readiness cycle per write, so the per-op cost is amortized over a big payload.
 
 So the native-async win is about *amortized batching at scale*, not lower per-op cost — it
-does not help the small-message (e.g. Redis-like) regime, where the two tie.
+does not help the small-message (e.g. Redis-like) regime, where p2 edges ahead.
+
+These p3 numbers are after the host was switched to a single-threaded tokio runtime
+(`#[tokio::main(flavor = "current_thread")]`): a flamegraph showed the default
+multi-thread runtime left idle workers parked in `__psynch_cvwait` and added cross-thread
+I/O wakeups for this single-threaded workload. That change is worth ~7–8% at every block
+size. The remaining per-op cost is wasmtime's component-model stream machinery (a host-task
+create/delete per write, copies, allocator churn), which is inherent to the async ABI and
+only amortizes as blocks grow. See the root README's "Optimizing the p3 host".
 
 > Note: write-stall latency is now behind `-L` (off by default), matching p2. It is
 > comparatively expensive on p3 — enabling it costs ~17% at 128 B (vs ~1% on p2), because

@@ -18,12 +18,21 @@ impl WasiView for MyState {
     }
 }
 
-#[tokio::main]
+// The guest is single-threaded (wasip2) and wasmtime drives it on the calling
+// thread via run_concurrent, so a multi-thread runtime only adds idle worker
+// threads parked in a condvar plus cross-thread I/O-driver wakeups. Pin to one.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut config = Config::new();
     config.async_support(true);
     config.wasm_component_model_async(true);
+    // Emit a /tmp/perf-<pid>.map of JIT'd wasm functions so a sampling profiler
+    // (dtrace) can symbolicate guest frames. Off unless NETPERF_PERFMAP=1, so it
+    // never perturbs a normal run. See tools/p3-flamegraph.sh.
+    if std::env::var_os("NETPERF_PERFMAP").is_some() {
+        config.profiler(wasmtime::ProfilingStrategy::PerfMap);
+    }
     let engine = Engine::new(&config)?;
 
     let mut linker = Linker::<MyState>::new(&engine);
