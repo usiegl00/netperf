@@ -32,6 +32,17 @@ each has the same `cargo build -p <name> --target wasm32-wasip2` shape. Only
 it can't be built for `wasm32-wasip2` alongside the others) and pins an exact wasmtime
 version, so it carries its own `Cargo.lock` and builds from its own directory.
 
+## Requirements
+
+- A Rust toolchain with the wasm target: `rustup target add wasm32-wasip2`
+- **wasmtime** to run the components — the official installer (`curl
+  https://wasmtime.dev/install.sh -sSf | bash`), `brew install wasmtime`, or
+  `cargo install wasmtime-cli`. (p2 runs under the `wasmtime` CLI; p3 runs under the
+  `netperf-p3-host` binary built from this repo, but the flamegraph tooling still calls
+  the `wasmtime` CLI.)
+- Profiling only: [`inferno`](https://crates.io/crates/inferno) for flamegraph rendering
+  (`cargo install inferno`).
+
 ## p2 — WASI Preview 2 + tokio
 
 ```
