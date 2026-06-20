@@ -43,6 +43,13 @@ version, so it carries its own `Cargo.lock` and builds from its own directory.
 - Profiling only: [`inferno`](https://crates.io/crates/inferno) for flamegraph rendering
   (`cargo install inferno`).
 
+The **p3** backend needs nothing extra to build: it uses the same `wasm32-wasip2` target,
+which compiles the guest `cdylib` straight into a component — no `cargo-component`,
+`wasm-tools`, or componentize step. `wit-bindgen` is an ordinary dependency and the WASI
+0.3 `wit/` files are vendored in-repo. The only p3-specific piece is building the runner,
+`netperf-p3-host` (a native `cargo build`, which pins its exact wasmtime); you do **not**
+use the `wasmtime` CLI to run p3.
+
 ## p2 — WASI Preview 2 + tokio
 
 ```
