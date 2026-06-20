@@ -17,5 +17,6 @@ serde_json = "1"
 getrandom = "0.3"
 netperf-core = { path = "../netperf-core" }
 
-[profile.release]
-opt-level = "s"
+# NOTE: the release opt-level for this crate lives at the workspace root
+# ([profile.release.package.netperf-p3]) — Cargo ignores profiles declared in a
+# non-root workspace member.

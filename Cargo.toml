@@ -6,3 +6,8 @@
 resolver = "2"
 members = ["crates/netperf-core", "crates/netperf-p2", "crates/netperf-p3"]
 exclude = ["crates/netperf-p3-host"]
+
+# Keep the p3 guest component small. This must live at the workspace root: Cargo
+# ignores a [profile.release] declared inside a non-root member crate.
+[profile.release.package.netperf-p3]
+opt-level = "s"
