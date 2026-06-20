@@ -37,6 +37,23 @@ difference between the two is the socket I/O backend (tokio `TcpStream` here vs
   commands, so a custom host is required. It is a **native** crate (excluded from the
   wasm workspace), built with a plain `cargo build`.
 
+## WIT version coupling
+
+WASI 0.3 is pre-release, so its WIT is still a moving `0.3.0-rc-<date>` target. Two things
+must agree on the **exact** revision or the component will fail to link against the host:
+
+1. the WIT vendored here in `wit/`, which the guest's `wit-bindgen` generates against, and
+2. the `wasi:sockets@0.3` revision baked into the wasmtime that `netperf-p3-host` pins
+   (`wasmtime = "=45.0.2"`).
+
+That's why `wit/` is copied from **wasmtime's own vendored WIT** rather than the published
+registry — the registry's plain `0.3.0` does **not** match wasmtime's
+`0.3.0-rc-<date>`, and a mismatch shows up as unresolved imports at instantiation, not a
+build error. So treat them as one unit: **bumping `netperf-p3-host`'s wasmtime means
+re-vendoring `wit/`** from the matching `wasmtime-wasi` crate (its `src/p3/wit/deps/`), and
+vice-versa. Both are pinned in-repo, so the shipped combination is consistent; the coupling
+only bites if you upgrade one side alone.
+
 ## Build & run
 From the repo root:
 ```
