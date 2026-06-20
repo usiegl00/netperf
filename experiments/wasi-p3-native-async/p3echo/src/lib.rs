@@ -1,5 +1,7 @@
 // WASI 0.3 native-async throughput/latency bench — no std::net, no tokio, and no
-// wasi:io/poll on the data path. Now with a netperf-style CLI and direction modes.
+// wasi:io/poll on the data path. netperf-style CLI, direction modes, and a control
+// protocol: the client negotiates the test over a control connection, so only the
+// client is configured; the server adapts.
 wit_bindgen::generate!({
     path: "wit",
     world: "echo",
@@ -18,7 +20,7 @@ use wit_bindgen::rt::async_support::StreamResult;
 #[derive(Parser)]
 #[command(name = "p3perf", about = "WASI 0.3 native-async throughput/latency bench")]
 struct Opts {
-    /// Run as server (listen for one connection)
+    /// Run as server (listen; test parameters are negotiated by the client)
     #[arg(short, long)]
     server: bool,
     /// Run as client, connecting to <HOST>
@@ -41,6 +43,69 @@ struct Opts {
     bidir: bool,
 }
 
+// ---- control protocol ------------------------------------------------------
+// Direction codes carried in the negotiated parameters.
+const DIR_FORWARD: u8 = 0; // client -> server
+const DIR_REVERSE: u8 = 1; // server -> client
+const DIR_BIDIR: u8 = 2;
+const PARAMS_LEN: usize = 17; // dir(1) + secs(8) + block(8)
+
+fn encode_params(dir: u8, secs: u64, block: u64) -> Vec<u8> {
+    let mut v = Vec::with_capacity(PARAMS_LEN);
+    v.push(dir);
+    v.extend_from_slice(&secs.to_le_bytes());
+    v.extend_from_slice(&block.to_le_bytes());
+    v
+}
+
+fn decode_params(b: &[u8]) -> Option<(u8, u64, usize)> {
+    if b.len() < PARAMS_LEN {
+        return None;
+    }
+    let secs = u64::from_le_bytes(b[1..9].try_into().ok()?);
+    let block = u64::from_le_bytes(b[9..17].try_into().ok()?);
+    Some((b[0], secs, block as usize))
+}
+
+/// Map (direction, am-I-server) -> (sending, receiving).
+fn roles(dir: u8, server: bool) -> (bool, bool) {
+    match dir {
+        DIR_BIDIR => (true, true),
+        DIR_REVERSE => (server, !server), // server sends
+        _ => (!server, server),           // forward: client sends
+    }
+}
+
+/// Send a short control message and close the stream.
+async fn send_control(sock: &TcpSocket, bytes: Vec<u8>) {
+    let (mut tx, rx) = wit_stream::new::<u8>();
+    let send_fut = sock.send(rx).await;
+    futures::join!(
+        async {
+            let _ = tx.write_all(bytes).await;
+            drop(tx);
+        },
+        async {
+            let _ = send_fut.await;
+        }
+    );
+}
+
+/// Read at least `n` bytes of a control message.
+async fn recv_control(sock: &TcpSocket, n: usize) -> Vec<u8> {
+    let (mut rx, _done) = sock.receive().await;
+    let mut acc: Vec<u8> = Vec::with_capacity(n);
+    while acc.len() < n {
+        let (status, b) = rx.read(Vec::with_capacity(n)).await;
+        match status {
+            StreamResult::Complete(_) => acc.extend_from_slice(&b),
+            _ => break,
+        }
+    }
+    acc
+}
+
+// ---- data plane ------------------------------------------------------------
 /// Yield once to the executor so co-resident futures get a turn. Used in bidir to
 /// bound each direction to one block per scheduling pass (≈1:1 fairness); without it
 /// the receive loop runs many synchronously-ready reads per pass and starves the sender.
@@ -71,7 +136,6 @@ fn pct(sorted: &[u64], p: u64) -> u64 {
 async fn send_all(sock: &TcpSocket, block: usize, secs: u64, fair: bool) -> (u64, Vec<u64>, f64) {
     let (mut tx, rx) = wit_stream::new::<u8>();
     let send_fut = sock.send(rx).await;
-    // The writer fills `tx` while `send_fut` drains it to TCP — run both concurrently.
     let writer = async {
         let mut buf = vec![0u8; block];
         let mut total = 0u64;
@@ -142,61 +206,78 @@ fn report_rx(role: &str, total: u64, el: f64) {
     eprintln!("[{role} RX] {total} bytes in {el:.3}s -> {:.2} Gbits/sec", total as f64 * 8.0 / el / 1e9);
 }
 
+/// Run the data transfer for a negotiated (sending, receiving) role.
+async fn run_data(sock: &TcpSocket, sending: bool, receiving: bool, block: usize, secs: u64, role: &str) {
+    match (sending, receiving) {
+        (true, true) => {
+            // Bidir: yield each iteration so neither direction starves the other.
+            let ((tx_b, mut tx_s, tx_e), (rx_b, rx_e)) =
+                futures::join!(send_all(sock, block, secs, true), recv_all(sock, block, true));
+            report_tx(role, tx_b, &mut tx_s, tx_e);
+            report_rx(role, rx_b, rx_e);
+        }
+        (true, false) => {
+            let (b, mut s, e) = send_all(sock, block, secs, false).await;
+            report_tx(role, b, &mut s, e);
+        }
+        (false, true) => {
+            let (b, e) = recv_all(sock, block, false).await;
+            report_rx(role, b, e);
+        }
+        (false, false) => {}
+    }
+}
+
+async fn listen(port: u16) -> Result<TcpSocket, ()> {
+    let s = TcpSocket::create(IpAddressFamily::Ipv4).await.map_err(|_| ())?;
+    s.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress { port, address: (0, 0, 0, 0) }))
+        .await.map_err(|_| ())?;
+    Ok(s)
+}
+
+async fn connect(addr: (u8, u8, u8, u8), port: u16) -> Result<TcpSocket, ()> {
+    let s = TcpSocket::create(IpAddressFamily::Ipv4).await.map_err(|_| ())?;
+    s.connect(IpSocketAddress::Ipv4(Ipv4SocketAddress { port, address: addr }))
+        .await.map_err(|_| ())?;
+    Ok(s)
+}
+
 struct Component;
 
 impl Guest for Component {
     async fn run() -> Result<(), ()> {
         let o = Opts::parse();
-        let server = o.server;
-        // Map (role, direction) -> which directions this side drives.
-        let (sending, receiving) = if o.bidir {
-            (true, true)
-        } else if o.reverse {
-            (server, !server) // reverse: server sends, client receives
-        } else {
-            (!server, server) // forward: client sends, server receives
-        };
-        let role = if server { "server" } else { "client" };
 
-        let peer = if server {
-            let s = TcpSocket::create(IpAddressFamily::Ipv4).await.map_err(|_| ())?;
-            s.bind(IpSocketAddress::Ipv4(Ipv4SocketAddress { port: o.port, address: (0, 0, 0, 0) }))
-                .await.map_err(|_| ())?;
-            let mut conns = s.listen().await.map_err(|_| ())?;
-            eprintln!("[p3perf] server listening on :{} (tx={sending} rx={receiving})", o.port);
-            conns.next().await.ok_or(())?
+        if o.server {
+            // One listener serves the control connection then the data connection.
+            let lsock = listen(o.port).await?;
+            let mut conns = lsock.listen().await.map_err(|_| ())?;
+            eprintln!("[p3perf] server listening on :{}", o.port);
+
+            let ctrl = conns.next().await.ok_or(())?;
+            let (dir, secs, block) = decode_params(&recv_control(&ctrl, PARAMS_LEN).await).ok_or(())?;
+            drop(ctrl);
+            let (sending, receiving) = roles(dir, true);
+            eprintln!("[p3perf] negotiated: dir={dir} secs={secs} block={block} (tx={sending} rx={receiving})");
+
+            let data = conns.next().await.ok_or(())?;
+            run_data(&data, sending, receiving, block, secs, "server").await;
         } else {
             let host = o.client.clone().unwrap_or_else(|| "127.0.0.1".into());
             let ip = Ipv4Addr::from_str(&host).map_err(|_| ())?.octets();
-            let s = TcpSocket::create(IpAddressFamily::Ipv4).await.map_err(|_| ())?;
-            s.connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
-                port: o.port,
-                address: (ip[0], ip[1], ip[2], ip[3]),
-            }))
-            .await.map_err(|_| ())?;
-            eprintln!("[p3perf] client connected {host}:{} (tx={sending} rx={receiving})", o.port);
-            s
-        };
+            let addr = (ip[0], ip[1], ip[2], ip[3]);
+            let dir = if o.bidir { DIR_BIDIR } else if o.reverse { DIR_REVERSE } else { DIR_FORWARD };
 
-        match (sending, receiving) {
-            (true, true) => {
-                // Bidir: yield each iteration so neither direction starves the other.
-                let ((tx_b, mut tx_s, tx_e), (rx_b, rx_e)) = futures::join!(
-                    send_all(&peer, o.length, o.time, true),
-                    recv_all(&peer, o.length, true)
-                );
-                report_tx(role, tx_b, &mut tx_s, tx_e);
-                report_rx(role, rx_b, rx_e);
-            }
-            (true, false) => {
-                let (b, mut s, e) = send_all(&peer, o.length, o.time, false).await;
-                report_tx(role, b, &mut s, e);
-            }
-            (false, true) => {
-                let (b, e) = recv_all(&peer, o.length, false).await;
-                report_rx(role, b, e);
-            }
-            (false, false) => {}
+            // Control connection: negotiate, then close.
+            let ctrl = connect(addr, o.port).await?;
+            send_control(&ctrl, encode_params(dir, o.time, o.length as u64)).await;
+            drop(ctrl);
+
+            // Data connection.
+            let data = connect(addr, o.port).await?;
+            let (sending, receiving) = roles(dir, false);
+            eprintln!("[p3perf] client {host}:{} dir={dir} (tx={sending} rx={receiving})", o.port);
+            run_data(&data, sending, receiving, o.length, o.time, "client").await;
         }
         Ok(())
     }

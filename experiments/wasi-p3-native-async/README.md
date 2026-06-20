@@ -14,6 +14,12 @@ poll-based `wasm32-wasip2` + tokio build in the parent crate.
   - `-p, --port`, `-t, --time <secs>`, `-l, --length <bytes>` (block size).
   - `-R, --reverse` — server sends, client receives.
   - `--bidir` — both ends send and receive.
+
+  Only the **client** is configured. It opens a **control connection** first and
+  sends the negotiated parameters (direction, duration, block size) as a 17-byte
+  message; the server reads them and adapts its role. A second **data connection**
+  then carries the transfer (this split mirrors netperf and sets up `-P` later).
+
   - `wit/` is wasmtime's vendored WASI 0.3 WIT (must match the runtime's exact
     `0.3.x-rc` version; the published registry `0.3.0` does **not** match).
 - `p3host/` — a minimal embedding (~40 lines) that wires both `wasmtime_wasi::p2`
@@ -29,12 +35,11 @@ poll-based `wasm32-wasip2` + tokio build in the parent crate.
 ECHO=p3echo/target/wasm32-wasip2/release/p3echo.wasm
 HOST=p3host/target/release/p3host
 
-# forward (client -> server)
+# server takes no test flags — the client negotiates everything over the control connection
 "$HOST" "$ECHO" -s &
-"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -l 2097152
-# reverse (server -> client): pass -R to both; -t goes on the sending side (server)
-"$HOST" "$ECHO" -s -R -t 5 &
-"$HOST" "$ECHO" -c 127.0.0.1 -R
+"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -l 2097152          # forward (client -> server)
+"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -R                  # reverse (server -> client)
+"$HOST" "$ECHO" -c 127.0.0.1 -t 5 --bidir             # bidirectional
 ```
 
 ## Measured result (loopback, single stream)
@@ -44,11 +49,12 @@ poll-based tokio path — because the host pipes a stream to TCP in batched copi
 instead of crossing the guest/host boundary with a poll-readiness cycle per write.
 
 ## Status / limitations (prototype)
-- **No control protocol yet.** The two ends are launched manually and must be given
-  matching direction flags; test duration (`-t`) applies to the *sending* side (the
-  receiver drains until the peer closes). A real port needs the handshake +
-  parameter negotiation from the parent crate's `control.rs`/`net_utils.rs`.
-- **Single connection.** No `-P` parallel streams yet.
+- **Control protocol: client-driven.** Only the client is configured; direction,
+  duration, and block size are negotiated over the control connection (verified:
+  server runs with just `-s` for forward/reverse/bidir). It is one-way params only —
+  no results exchange back to the client yet (each end prints its own numbers).
+- **Single data connection.** No `-P` parallel streams yet (the control/data split
+  is in place to add it).
 - **`--bidir` is fair.** Earlier it suffered self-reinforcing starvation in the
   single-threaded cooperative executor (one direction collapsed to a fraction of line
   rate). Each direction now yields to the executor once per block, bounding both to
