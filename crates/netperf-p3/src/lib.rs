@@ -4,7 +4,7 @@
 // async — no std::net, no tokio, no wasi:io/poll on the data path).
 wit_bindgen::generate!({
     path: "wit",
-    world: "echo",
+    world: "netperf",
     async: true,
     generate_all,
 });
@@ -20,7 +20,7 @@ use wasi::sockets::types::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, 
 use wit_bindgen::rt::async_support::{StreamReader, StreamResult, StreamWriter};
 
 #[derive(Parser)]
-#[command(name = "p3perf", about = "WASI 0.3 native-async throughput/latency bench")]
+#[command(name = "netperf-p3", about = "WASI 0.3 native-async throughput/latency bench")]
 struct Opts {
     /// Run as server (listen; the test is negotiated by the client)
     #[arg(short, long)]
@@ -303,7 +303,7 @@ async fn server_conn(sock: &TcpSocket, expected: [u8; COOKIE_LEN], recv_data: bo
         }
     }
     if acc.len() < COOKIE_LEN || acc[..COOKIE_LEN] != expected[..] {
-        eprintln!("[p3perf] data connection failed cookie auth; dropping");
+        eprintln!("[netperf-p3] data connection failed cookie auth; dropping");
         return Vec::new();
     }
     let leftover = (acc.len() - COOKIE_LEN) as u64; // data bytes read alongside the cookie
@@ -363,13 +363,13 @@ impl Guest for Component {
         if o.server {
             let lsock = listen(o.port).await?;
             let mut conns = lsock.listen().await.map_err(|_| ())?;
-            eprintln!("[p3perf] server listening on :{}", o.port);
+            eprintln!("[netperf-p3] server listening on :{}", o.port);
 
             let ctrl = conns.next().await.ok_or(())?;
             let p: Params = recv_msg(&ctrl).await.ok_or(())?;
             let (sending, receiving) = roles(p.dir, true);
             let fair = p.dir == DIR_BIDIR || p.parallel > 1;
-            eprintln!("[p3perf] negotiated dir={} secs={} block={} P={} (tx={sending} rx={receiving})", p.dir, p.secs, p.block, p.parallel);
+            eprintln!("[netperf-p3] negotiated dir={} secs={} block={} P={} (tx={sending} rx={receiving})", p.dir, p.secs, p.block, p.parallel);
 
             let mut datas = Vec::with_capacity(p.parallel as usize);
             for _ in 0..p.parallel {
@@ -397,7 +397,7 @@ impl Guest for Component {
             }
             let (sending, receiving) = roles(dir, false);
             let fair = dir == DIR_BIDIR || o.parallel > 1;
-            eprintln!("[p3perf] client {host}:{} dir={dir} P={} (tx={sending} rx={receiving})", o.port, o.parallel);
+            eprintln!("[netperf-p3] client {host}:{} dir={dir} P={} (tx={sending} rx={receiving})", o.port, o.parallel);
             let local = to_results(run_streams(&datas, false, cb, sending, receiving, o.length, o.time, fair, o.latency).await);
 
             let remote: TestResults = recv_msg(&ctrl).await.unwrap_or_default();
