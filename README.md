@@ -12,7 +12,7 @@ a run on each is the socket layer.
 ## Quickstart
 
 From a clone, all the way to a Redis-like load test (100 connections, 128-byte messages,
-both directions, 10 s) on the p2 backend:
+both directions, 10 s) on both backends:
 
 ```bash
 # 1. prerequisites: wasm target + the wasmtime runtime
@@ -22,8 +22,17 @@ brew install wasmtime   # or: curl https://wasmtime.dev/install.sh -sSf | bash
 # 2. build the p2 component
 cargo build -p netperf-p2 --release --target wasm32-wasip2
 
-# 3. run it (tools/run.sh starts a server, runs the client, cleans up)
+# 3. run it on p2 (tools/run.sh starts a server, runs the client, cleans up)
 bash tools/run.sh -t 10 -P 100 -l 128 --bidir
+
+# 4. build p3 (guest component + its native host) and run the same load
+cargo build -p netperf-p3 --release --target wasm32-wasip2
+(cd crates/netperf-p3-host && cargo build --release)
+HOST=crates/netperf-p3-host/target/release/netperf-p3-host
+GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
+"$HOST" "$GUEST" -s & sleep 1                          # server in the background
+"$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 100 -l 128 --bidir
+kill %1                                                # stop the server
 ```
 
 This is op-rate bound, so expect a few hundred Mbit/s — that's ~0.8M small messages/sec,
