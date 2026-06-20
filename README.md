@@ -22,8 +22,8 @@ brew install wasmtime   # or: curl https://wasmtime.dev/install.sh -sSf | bash
 # 2. build the p2 component
 cargo build -p netperf-p2 --release --target wasm32-wasip2
 
-# 3. run it on p2 (tools/run.sh starts a server, runs the client, cleans up)
-bash tools/run.sh -t 10 -P 100 -l 128 --bidir
+# 3. run it on p2 (tools/run-p2.sh starts a server, runs the client, cleans up)
+bash tools/run-p2.sh -t 10 -P 100 -l 128 --bidir
 
 # 4. build p3 (guest component + its native host) and run the same load
 cargo build -p netperf-p3 --release --target wasm32-wasip2
@@ -49,7 +49,8 @@ crates/
                      async sockets via wit-bindgen. Feature-equivalent to p2.
   netperf-p3-host/   Minimal wasmtime embedding that links wasi p2+p3 and runs the
                      p3 component (the wasmtime CLI does not link p3 sockets). Native.
-tools/               run.sh, host-flamegraph.sh, kernel symbolication helpers.
+tools/               run-p2.sh / run-p3.sh, p2-flamegraph.sh / p3-flamegraph.sh, kernel
+                     symbolication helpers.
 ```
 
 The three **wasm** crates (`netperf-core`, `netperf-p2`, `netperf-p3`) form one Cargo
@@ -89,9 +90,9 @@ wasmtime run -S inherit-network -S allow-ip-name-lookup "$WASM" -c 127.0.0.1 -t 
 
 Or use the launcher, which starts a server, runs a client, and cleans up:
 ```
-bash tools/run.sh -t 10 -P 4          # 4-stream throughput
-bash tools/run.sh -t 10 -R            # reverse (server sends)
-bash tools/run.sh -t 10 -L            # latency-under-load
+bash tools/run-p2.sh -t 10 -P 4          # 4-stream throughput
+bash tools/run-p2.sh -t 10 -R            # reverse (server sends)
+bash tools/run-p2.sh -t 10 -L            # latency-under-load
 ```
 
 ## p3 — WASI Preview 3 native async
@@ -108,7 +109,7 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 4
 ```
 
-Or use the launcher (the p3 analogue of `tools/run.sh` — starts a server, runs a client,
+Or use the launcher (the p3 analogue of `tools/run-p2.sh` — starts a server, runs a client,
 cleans up):
 ```
 bash tools/run-p3.sh -t 10 -P 4
@@ -116,7 +117,7 @@ bash tools/run-p3.sh -t 10 -P 4
 
 ## Profiling: full-stack flamegraphs
 
-`tools/host-flamegraph.sh` captures a **single combined flamegraph spanning the kernel,
+`tools/p2-flamegraph.sh` captures a **single combined flamegraph spanning the kernel,
 the wasmtime host, and the wasm guest** for a p2 throughput run. It starts a server,
 samples the client with `dtrace` at 997 Hz, symbolicates wasm frames against wasmtime's
 `--profile=perfmap` output, and renders an interactive SVG with `inferno`.
@@ -128,10 +129,10 @@ them side by side:
 
 ```
 # needs root for the dtrace sample — run with the `!` prefix so you can type the password
-! bash tools/host-flamegraph.sh                  # default: -t 10 -P 1  -> wasmtime-host-t_10_-P_1.svg
-! bash tools/host-flamegraph.sh -t 10 -P 4       # 4 parallel streams  -> wasmtime-host-t_10_-P_4.svg
-! bash tools/host-flamegraph.sh -t 10 -R         # reverse (server sends)
-! bash tools/host-flamegraph.sh -t 10 -l 2097152 # 2 MiB blocks
+! bash tools/p2-flamegraph.sh                  # default: -t 10 -P 1  -> p2-host-t_10_-P_1.svg
+! bash tools/p2-flamegraph.sh -t 10 -P 4       # 4 parallel streams  -> p2-host-t_10_-P_4.svg
+! bash tools/p2-flamegraph.sh -t 10 -R         # reverse (server sends)
+! bash tools/p2-flamegraph.sh -t 10 -l 2097152 # 2 MiB blocks
 ```
 
 Prerequisites: build the p2 wasm first (`cargo build -p netperf-p2 --release --target
@@ -156,7 +157,7 @@ Debug Kit (KDK) for your build (`sw_vers -buildVersion`), then re-symbolicate th
 capture without re-running the workload:
 
 ```
-! bash tools/resymbolicate-kernel.sh             # reuses /tmp/wasmtime-host.stacks -> wasmtime-host-kernel.svg
+! bash tools/resymbolicate-kernel.sh             # reuses /tmp/p2-host.stacks -> p2-host-kernel.svg
 ```
 
 It refuses a KDK whose build doesn't match the running kernel (the addresses would be
@@ -257,10 +258,10 @@ payloads, traffic both directions.
 
 ```
 # non-pipelined (packet-rate / small-message bound, the classic redis-benchmark hammer)
-bash tools/run.sh -t 10 -P 100 -l 128 --bidir
+bash tools/run-p2.sh -t 10 -P 100 -l 128 --bidir
 
 # pipelined (throughput bound: deep pipelines / MGET / large values)
-bash tools/run.sh -t 10 -P 16 -l 16384 --bidir
+bash tools/run-p2.sh -t 10 -P 16 -l 16384 --bidir
 ```
 
 Map: `-l` small ≈ small commands/replies; `--bidir` ≈ requests up + replies down;

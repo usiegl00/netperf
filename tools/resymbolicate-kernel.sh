@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Re-symbolicate an existing dtrace capture (/tmp/wasmtime-host.stacks) with
+# Re-symbolicate an existing dtrace capture (/tmp/p2-host.stacks) with
 # kernel symbols. Reuses the prior capture + perfmap; only the KASLR slide needs
 # root (one dtrace read). Run via the `!` prefix so you can type the password:
 #   ! bash tools/resymbolicate-kernel.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-STACKS=/tmp/wasmtime-host.stacks
+STACKS=/tmp/p2-host.stacks
 INFERNO="$HOME/.cargo/bin/inferno-flamegraph"
-OUT=wasmtime-host-kernel.svg
+OUT=p2-host-kernel.svg
 
-[ -f "$STACKS" ] || { echo "no $STACKS (run tools/host-flamegraph.sh first)"; exit 1; }
+[ -f "$STACKS" ] || { echo "no $STACKS (run tools/p2-flamegraph.sh first)"; exit 1; }
 MAP=$(ls -t /tmp/perf-*.map 2>/dev/null | head -1)
 [ -n "$MAP" ] || { echo "no /tmp/perf-*.map found"; exit 1; }
 
@@ -61,14 +61,14 @@ fi
 SLIDE=$(python3 -c "print(hex(int('$RUNTIME',16) - int('$STATIC',16)))")
 echo "anchor $ANCHOR: static=0x$STATIC runtime=$RUNTIME  ->  KASLR slide=$SLIDE"
 
-python3 tools/symbolicate_stacks.py "$STACKS" "$MAP" --ksyms /tmp/kernel.ksyms --kslide "$SLIDE" > /tmp/wasmtime-host-kernel.folded
-echo "folded       : $(wc -l < /tmp/wasmtime-host-kernel.folded) unique stacks"
+python3 tools/symbolicate_stacks.py "$STACKS" "$MAP" --ksyms /tmp/kernel.ksyms --kslide "$SLIDE" > /tmp/p2-host-kernel.folded
+echo "folded       : $(wc -l < /tmp/p2-host-kernel.folded) unique stacks"
 
 "$INFERNO" \
   --title "netperf wasip2: kernel(symbolicated) + wasmtime host + wasm guest" \
   --subtitle "client sender 127.0.0.1 @997Hz; kernel=$(basename "$KERN") slide=$SLIDE" \
   --colors aqua \
-  /tmp/wasmtime-host-kernel.folded > "$OUT"
+  /tmp/p2-host-kernel.folded > "$OUT"
 echo "WROTE $(pwd)/$OUT"
 echo
 
@@ -77,7 +77,7 @@ echo "=== top kernel leaves (self-time; large +offset = sparse-table guess) ==="
 python3 - "$OUT" <<'PY'
 import re,collections,sys
 tot=collections.Counter()
-for line in open('/tmp/wasmtime-host-kernel.folded'):
+for line in open('/tmp/p2-host-kernel.folded'):
     i=line.rfind(' '); frames=line[:i].split(';'); cnt=int(line[i+1:])
     lf=frames[-1]
     if lf.startswith('kernel`'): tot[lf]+=cnt

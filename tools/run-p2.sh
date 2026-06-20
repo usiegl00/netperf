@@ -2,9 +2,9 @@
 # Convenience launcher: starts a netperf server under wasmtime, runs a client
 # against 127.0.0.1 with whatever flags you pass, then cleans up the server.
 #
-#   bash tools/run.sh -t 10 -P 1 -L         # latency-under-load run
-#   bash tools/run.sh -t 5 -P 4             # 4-stream throughput run
-#   bash tools/run.sh -t 10 -R              # reverse (server sends)
+#   bash tools/run-p2.sh -t 10 -P 1 -L         # latency-under-load run
+#   bash tools/run-p2.sh -t 5 -P 4             # 4-stream throughput run
+#   bash tools/run-p2.sh -t 10 -R              # reverse (server sends)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Convenience launcher for the p3 backend, mirroring tools/run.sh: starts a
+# Convenience launcher for the p3 backend, mirroring tools/run-p2.sh: starts a
 # netperf-p3 server under the custom host (netperf-p3-host), runs a client
 # against 127.0.0.1 with whatever flags you pass, then cleans up the server.
 #

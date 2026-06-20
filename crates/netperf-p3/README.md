@@ -70,7 +70,7 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -c 127.0.0.1 -t 5 --bidir            # bidirectional
 ```
 
-Or use `tools/run-p3.sh` (the p3 analogue of `tools/run.sh`), which starts the server, runs
+Or use `tools/run-p3.sh` (the p3 analogue of `tools/run-p2.sh`), which starts the server, runs
 the client, and cleans up:
 ```
 bash tools/run-p3.sh -t 5 -l 2097152      # forward
