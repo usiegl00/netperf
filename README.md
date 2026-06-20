@@ -43,7 +43,7 @@ Or use the launcher, which starts a server, runs a client, and cleans up:
 ```
 bash tools/run.sh -t 10 -P 4          # 4-stream throughput
 bash tools/run.sh -t 10 -R            # reverse (server sends)
-bash tools/run.sh -t 10 -N -L         # latency-under-load
+bash tools/run.sh -t 10 -L            # latency-under-load
 ```
 
 ## p3 — WASI Preview 3 native async
@@ -103,16 +103,54 @@ local paths and are gitignored.)
 
 `-s` server · `-c <HOST>` client · `-p <PORT>` · `-t <SECS>` duration ·
 `-l <BYTES>` block size · `-P <N>` parallel streams · `-R` reverse · `--bidir`
-bidirectional. The client negotiates everything over a control connection, so the
-server is given only `-s`.
+bidirectional · `-L` latency-under-load. The client negotiates everything over a
+control connection, so the server is given only `-s`.
+
+There is **no `-N`/`--no-delay`**: see below.
 
 ## WASI port notes
 
 The original tool assumed a multi-threaded native runtime; the port runs single-threaded
 (wasip2 has no threads), fills the send buffer via `getrandom` (`wasi:random`) instead of
 `/dev/urandom`, drops the raw-fd socket-buffer hack, and binds IPv4 (wasip2 dual-stack
-bind is unreliable). `--socket-buffers` and `-N/--no-delay` parse but degrade to warnings
-where the `wasi:sockets` interface has no equivalent.
+bind is unreliable). `--socket-buffers` parses but degrades to a warning where the
+`wasi:sockets` interface has no equivalent.
+
+**No Nagle / `TCP_NODELAY` control.** `wasi:sockets` has no nodelay verb in Preview 2 or
+0.3 — the `tcp` resource exposes only keepalive, hop-limit, and send/recv buffer sizes.
+It isn't a permanent exclusion: it's an open design item upstream
+([wasi-sockets#75](https://github.com/WebAssembly/wasi-sockets/issues/75)), stuck on how
+nodelay should interact with the byte-stream (`stream<u8>`) I/O model — likely a
+cork/`MSG_MORE`-style flush rather than a POSIX sticky boolean. There is no guest-side
+escape hatch (a userspace flush forces bytes to the kernel but cannot change the kernel's
+Nagle hold), so we removed the `-N` flag rather than ship one that silently no-ops. The
+only lever today is host policy (patching the runtime to set the option on the OS socket),
+which we deliberately do not do.
+
+### Simulating a Redis-like workload
+
+netperf is a bulk-streaming tool, not a request/response benchmark — it never blocks
+waiting for a reply, so it cannot reproduce Redis's per-connection RTT-bound ping-pong
+(`redis-benchmark`/`memtier_benchmark` are the right tools for that). What it *can*
+approximate is the **wire shape** of a busy Redis server: many connections, small
+payloads, traffic both directions.
+
+```
+# non-pipelined (packet-rate / small-message bound, the classic redis-benchmark hammer)
+bash tools/run.sh -t 10 -P 100 -l 128 --bidir
+
+# pipelined (throughput bound: deep pipelines / MGET / large values)
+bash tools/run.sh -t 10 -P 16 -l 16384 --bidir
+```
+
+Map: `-l` small ≈ small commands/replies; `--bidir` ≈ requests up + replies down;
+`-P N` high ≈ many concurrent client connections; `-L` ≈ the tail-latency you actually
+care about. Caveats: with no `TCP_NODELAY`, Nagle stays on, so small back-to-back writes
+may coalesce more than real Redis (which sets nodelay) — though on **loopback** Nagle
+rarely engages (ACKs return in microseconds), so it barely affects these numbers; it only
+distorts results over a real-RTT link. And `--bidir` here is symmetric full-duplex,
+whereas a single Redis connection is serialized ping-pong — the *aggregate* NIC view
+across many connections is the part that lines up.
 
 ### License
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.

@@ -20,7 +20,6 @@ pub struct TestParameters {
     pub parallel: u16,
     pub block_size: usize,
     pub client_version: String,
-    pub no_delay: bool,
     pub socket_buffers: Option<usize>,
     /// Collect latency-under-load correlates (write-stall / arrival-gap / goodput windows).
     pub measure_latency: bool,
@@ -42,7 +41,6 @@ impl TestParameters {
             parallel: opts.parallel,
             block_size: opts.length.unwrap_or(default_block_size),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
-            no_delay: opts.no_delay,
             socket_buffers: opts.socket_buffers,
             measure_latency: opts.latency,
         }

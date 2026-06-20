@@ -232,13 +232,10 @@ impl StreamWorker {
     }
 
     fn configure_stream_socket(&mut self) -> Result<()> {
-        if self.params.no_delay {
-            // TCP_NODELAY is not part of the `wasi:sockets` interface and returns
-            // `Unsupported` on wasm32-wasip2; degrade gracefully instead of failing.
-            if let Err(e) = self.stream.set_nodelay(true) {
-                warn!("set_nodelay() is unsupported on this target: {}", e);
-            }
-        }
+        // TCP_NODELAY (Nagle control) is intentionally absent: it is not part of the
+        // `wasi:sockets` interface (tracked upstream in wasi-sockets#75), so there is
+        // no `-N` flag — see the README's "WASI port notes" for the Redis-simulation
+        // implications.
         // Socket send/receive buffer sizing relied on raw-fd access, which is not
         // available on wasm32-wasip2 (socket duplication is unsupported).
         if self.params.socket_buffers.is_some() {
