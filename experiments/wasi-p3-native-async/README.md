@@ -75,3 +75,13 @@ instead of crossing the guest/host boundary with a poll-readiness cycle per writ
   one block per scheduling pass — measured ~22.9 / 22.6 Gbps both ways at matched
   duration (was 80:1). The yield is bidir-only; single-direction transfers keep the
   zero-yield hot path.
+- **Cookie auth on every data connection.** The client generates a per-test cookie
+  (in the negotiated params); each data connection presents it as the head of the
+  client→server stream, and the server validates before counting any data (mismatch →
+  the connection is dropped). For forward/bidir the cookie rides the existing data
+  stream, so throughput is unchanged (forward ~68, bidir ~47/dir, `-P 4` SUM ~62).
+  **Known cost — reverse:** the cookie needs a *separate* client→server stream (the
+  data flows the other way), and that second short-lived stream throttles the server's
+  send in the single-threaded executor — reverse drops from ~68 to ~31 Gbits/sec. A
+  fix (keeping that stream open instead of half-closing early, or coalescing the
+  cookie onto the control connection per stream) is left as a follow-up.
