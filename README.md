@@ -17,7 +17,7 @@ both directions, 10 s) on the p2 backend:
 ```bash
 # 1. prerequisites: wasm target + the wasmtime runtime
 rustup target add wasm32-wasip2
-curl https://wasmtime.dev/install.sh -sSf | bash   # or: brew install wasmtime
+brew install wasmtime   # or: curl https://wasmtime.dev/install.sh -sSf | bash
 
 # 2. build the p2 component
 cargo build -p netperf-p2 --release --target wasm32-wasip2
@@ -57,9 +57,9 @@ version, so it carries its own `Cargo.lock` and builds from its own directory.
 ## Requirements
 
 - A Rust toolchain with the wasm target: `rustup target add wasm32-wasip2`
-- **wasmtime** to run the components — the official installer (`curl
-  https://wasmtime.dev/install.sh -sSf | bash`), `brew install wasmtime`, or
-  `cargo install wasmtime-cli`. (p2 runs under the `wasmtime` CLI; p3 runs under the
+- **wasmtime** to run the components — `brew install wasmtime` (or the official installer
+  `curl https://wasmtime.dev/install.sh -sSf | bash`, or `cargo install wasmtime-cli`).
+  (p2 runs under the `wasmtime` CLI; p3 runs under the
   `netperf-p3-host` binary built from this repo, but the flamegraph tooling still calls
   the `wasmtime` CLI.)
 - Profiling only: [`inferno`](https://crates.io/crates/inferno) for flamegraph rendering
