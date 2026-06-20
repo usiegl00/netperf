@@ -60,6 +60,45 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 4
 ```
 
+## Profiling: full-stack flamegraphs
+
+`tools/host-flamegraph.sh` captures a **single combined flamegraph spanning the kernel,
+the wasmtime host, and the wasm guest** for a p2 throughput run. It starts a server,
+samples the client with `dtrace` at 997 Hz, symbolicates wasm frames against wasmtime's
+`--profile=perfmap` output, and renders an interactive SVG with `inferno`.
+
+Whatever client flags you pass are forwarded to the profiled client, so you can
+flamegraph different throughput scenarios. Each scenario writes its **own** SVG (the
+filename is derived from the flags), so runs don't clobber each other and you can diff
+them side by side:
+
+```
+# needs root for the dtrace sample — run with the `!` prefix so you can type the password
+! bash tools/host-flamegraph.sh                  # default: -t 10 -P 1  -> wasmtime-host-t_10_-P_1.svg
+! bash tools/host-flamegraph.sh -t 10 -P 4       # 4 parallel streams  -> wasmtime-host-t_10_-P_4.svg
+! bash tools/host-flamegraph.sh -t 10 -R         # reverse (server sends)
+! bash tools/host-flamegraph.sh -t 10 -l 2097152 # 2 MiB blocks
+```
+
+Prerequisites: build the p2 wasm first (`cargo build -p netperf-p2 --release --target
+wasm32-wasip2`) and `cargo install inferno`. Open the resulting `.svg` in a browser — it's
+a normal zoomable flamegraph.
+
+**Kernel symbols.** macOS ships a sparse kernel symbol table, so kernel frames show as
+large `+offsets` by default. For accurate kernel names, install the matching Kernel
+Debug Kit (KDK) for your build (`sw_vers -buildVersion`), then re-symbolicate the *last*
+capture without re-running the workload:
+
+```
+! bash tools/resymbolicate-kernel.sh             # reuses /tmp/wasmtime-host.stacks -> wasmtime-host-kernel.svg
+```
+
+It refuses a KDK whose build doesn't match the running kernel (the addresses would be
+wrong) and falls back to approximate names rather than producing silently-incorrect ones.
+
+(The generated `*.svg`, `*.folded`, `perf-*.map`, and `wasmtime*.json` artifacts embed
+local paths and are gitignored.)
+
 ## CLI (both backends)
 
 `-s` server · `-c <HOST>` client · `-p <PORT>` · `-t <SECS>` duration ·

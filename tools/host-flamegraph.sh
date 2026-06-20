@@ -2,18 +2,33 @@
 # Combined kernel + host(wasmtime) + wasm(guest) flamegraph for the netperf
 # wasip2 sender, captured with dtrace and symbolicated against wasmtime's perfmap.
 #
+# Any client flags you pass through are forwarded to the profiled client, so you
+# can flamegraph different throughput scenarios:
+#   ! bash tools/host-flamegraph.sh                 # default: -t 10 -P 1 (forward)
+#   ! bash tools/host-flamegraph.sh -t 10 -P 4      # 4 parallel streams
+#   ! bash tools/host-flamegraph.sh -t 10 -R        # reverse (server sends)
+#   ! bash tools/host-flamegraph.sh -t 10 -l 2097152  # 2 MiB blocks
+# Each scenario writes its own SVG (name derived from the flags), so runs don't
+# clobber each other and you can diff them side by side.
+#
 # Only the dtrace line needs root; everything else runs as you. Run via the
-# `!` prefix so you can type your sudo password in-session:
-#   ! bash tools/host-flamegraph.sh
+# `!` prefix so you can type your sudo password in-session.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 WASM=target/wasm32-wasip2/release/netperf-p2.wasm
-DUR=10
 INFERNO="$HOME/.cargo/bin/inferno-flamegraph"
 STACKS=/tmp/wasmtime-host.stacks
 FOLDED=/tmp/wasmtime-host.folded
-OUT=wasmtime-host.svg
+
+# Client flags to profile (default: a 10s single-stream forward run). Whatever you
+# pass on the command line replaces the default entirely.
+CLIENT_ARGS=("$@")
+[ ${#CLIENT_ARGS[@]} -eq 0 ] && CLIENT_ARGS=(-t 10 -P 1)
+# Derive a filesystem-safe label from the flags so each scenario gets its own SVG.
+LABEL=$(printf '%s' "${CLIENT_ARGS[*]}" | tr ' ' '_' | tr -cd 'A-Za-z0-9_.-')
+LABEL=${LABEL#-}          # drop the leading dash so the name isn't "host--t_10..."
+OUT="wasmtime-host${LABEL:+-$LABEL}.svg"
 
 command -v wasmtime >/dev/null || { echo "wasmtime not found"; exit 1; }
 [ -x "$INFERNO" ] || { echo "inferno-flamegraph not found at $INFERNO (cargo install inferno)"; exit 1; }
@@ -33,7 +48,7 @@ echo ">>> sudo dtrace will prompt for your password (it samples the client wasmt
 sudo dtrace \
   -x ustackframes=128 -x stackframes=128 -x bufsize=64m -x aggsize=128m \
   -n 'profile-997 /pid == $target/ { @[stack(), ustack()] = count(); }' \
-  -c "wasmtime run --profile=perfmap -S inherit-network -S allow-ip-name-lookup $WASM -c 127.0.0.1 -t $DUR -P 1" \
+  -c "wasmtime run --profile=perfmap -S inherit-network -S allow-ip-name-lookup $WASM -c 127.0.0.1 ${CLIENT_ARGS[*]}" \
   -o "$STACKS"
 
 kill $SRV 2>/dev/null
@@ -50,7 +65,7 @@ echo "folded  : $FOLDED ($(wc -l < "$FOLDED") unique stacks)"
 
 "$INFERNO" \
   --title "netperf wasip2: kernel + wasmtime host + wasm guest" \
-  --subtitle "client sender, 127.0.0.1, ${DUR}s @ 997Hz (wasmtime $(wasmtime --version | awk '{print $2}'))" \
+  --subtitle "client ${CLIENT_ARGS[*]}, 127.0.0.1 @ 997Hz (wasmtime $(wasmtime --version | awk '{print $2}'))" \
   --colors aqua \
   "$FOLDED" > "$OUT"
 
