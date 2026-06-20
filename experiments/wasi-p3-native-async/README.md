@@ -49,7 +49,9 @@ instead of crossing the guest/host boundary with a poll-readiness cycle per writ
   receiver drains until the peer closes). A real port needs the handshake +
   parameter negotiation from the parent crate's `control.rs`/`net_utils.rs`.
 - **Single connection.** No `-P` parallel streams yet.
-- **`--bidir` is functional but unfair.** Both directions transfer, but in the
-  single-threaded cooperative executor whichever side receives fast starves its own
-  sender (a self-reinforcing asymmetry), so one direction collapses to a fraction of
-  line rate. A fair scheduler / explicit pacing between the two directions is needed.
+- **`--bidir` is fair.** Earlier it suffered self-reinforcing starvation in the
+  single-threaded cooperative executor (one direction collapsed to a fraction of line
+  rate). Each direction now yields to the executor once per block, bounding both to
+  one block per scheduling pass — measured ~22.9 / 22.6 Gbps both ways at matched
+  duration (was 80:1). The yield is bidir-only; single-direction transfers keep the
+  zero-yield hot path.

@@ -41,6 +41,23 @@ struct Opts {
     bidir: bool,
 }
 
+/// Yield once to the executor so co-resident futures get a turn. Used in bidir to
+/// bound each direction to one block per scheduling pass (≈1:1 fairness); without it
+/// the receive loop runs many synchronously-ready reads per pass and starves the sender.
+async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(move |cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await
+}
+
 fn pct(sorted: &[u64], p: u64) -> u64 {
     if sorted.is_empty() {
         return 0;
@@ -51,7 +68,7 @@ fn pct(sorted: &[u64], p: u64) -> u64 {
 
 /// Produce data into a stream for `secs`, measuring per-write stall. Returns
 /// (bytes, stall-samples-ns, elapsed-secs).
-async fn send_all(sock: &TcpSocket, block: usize, secs: u64) -> (u64, Vec<u64>, f64) {
+async fn send_all(sock: &TcpSocket, block: usize, secs: u64, fair: bool) -> (u64, Vec<u64>, f64) {
     let (mut tx, rx) = wit_stream::new::<u8>();
     let send_fut = sock.send(rx).await;
     // The writer fills `tx` while `send_fut` drains it to TCP — run both concurrently.
@@ -71,6 +88,9 @@ async fn send_all(sock: &TcpSocket, block: usize, secs: u64) -> (u64, Vec<u64>, 
             if wrote == 0 {
                 break;
             }
+            if fair {
+                yield_now().await;
+            }
         }
         let elapsed = start.elapsed().as_secs_f64();
         drop(tx);
@@ -83,7 +103,7 @@ async fn send_all(sock: &TcpSocket, block: usize, secs: u64) -> (u64, Vec<u64>, 
 }
 
 /// Drain an inbound stream until the peer closes. Returns (bytes, elapsed-secs).
-async fn recv_all(sock: &TcpSocket, block: usize) -> (u64, f64) {
+async fn recv_all(sock: &TcpSocket, block: usize, fair: bool) -> (u64, f64) {
     let (mut rx, _done) = sock.receive().await;
     let t0 = Instant::now();
     let mut total = 0u64;
@@ -97,6 +117,9 @@ async fn recv_all(sock: &TcpSocket, block: usize) -> (u64, f64) {
                 buf = b;
             }
             _ => break,
+        }
+        if fair {
+            yield_now().await;
         }
     }
     (total, t0.elapsed().as_secs_f64())
@@ -157,17 +180,20 @@ impl Guest for Component {
 
         match (sending, receiving) {
             (true, true) => {
-                let ((tx_b, mut tx_s, tx_e), (rx_b, rx_e)) =
-                    futures::join!(send_all(&peer, o.length, o.time), recv_all(&peer, o.length));
+                // Bidir: yield each iteration so neither direction starves the other.
+                let ((tx_b, mut tx_s, tx_e), (rx_b, rx_e)) = futures::join!(
+                    send_all(&peer, o.length, o.time, true),
+                    recv_all(&peer, o.length, true)
+                );
                 report_tx(role, tx_b, &mut tx_s, tx_e);
                 report_rx(role, rx_b, rx_e);
             }
             (true, false) => {
-                let (b, mut s, e) = send_all(&peer, o.length, o.time).await;
+                let (b, mut s, e) = send_all(&peer, o.length, o.time, false).await;
                 report_tx(role, b, &mut s, e);
             }
             (false, true) => {
-                let (b, e) = recv_all(&peer, o.length).await;
+                let (b, e) = recv_all(&peer, o.length, false).await;
                 report_rx(role, b, e);
             }
             (false, false) => {}
