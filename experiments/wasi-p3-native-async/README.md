@@ -14,6 +14,7 @@ poll-based `wasm32-wasip2` + tokio build in the parent crate.
   - `-p, --port`, `-t, --time <secs>`, `-l, --length <bytes>` (block size).
   - `-R, --reverse` — server sends, client receives.
   - `--bidir` — both ends send and receive.
+  - `-P, --parallel <N>` — N parallel data streams.
 
   Only the **client** is configured. It opens a **control connection** first and
   sends the negotiated parameters (direction, duration, block size) as a 17-byte
@@ -57,8 +58,11 @@ instead of crossing the guest/host boundary with a poll-readiness cycle per writ
   matching the p2 crate's control framing. Verified with the server given just `-s`:
   forward/reverse/bidir all negotiate and report correctly (e.g. in reverse the client
   prints the *server's* write-stall percentiles).
-- **Single data connection.** No `-P` parallel streams yet (the control/data split
-  is in place to add it).
+- **`-P` multi-stream.** The client opens N data connections after the control
+  handshake; both ends run them concurrently (`join_all`) and the summary shows
+  per-stream lines plus a SUM per side/direction. The fairness yield scales to N
+  streams (e.g. `-P 4` forward → 4 × ~15.5 Gbits/sec, SUM ~62; loopback-bound, split
+  evenly). Streams all share one direction/role (no per-stream send/recv flip).
 - **`--bidir` is fair.** Earlier it suffered self-reinforcing starvation in the
   single-threaded cooperative executor (one direction collapsed to a fraction of line
   rate). Each direction now yields to the executor once per block, bounding both to

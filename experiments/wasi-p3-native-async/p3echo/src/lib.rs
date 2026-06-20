@@ -36,6 +36,9 @@ struct Opts {
     /// Block size in bytes
     #[arg(short, long, default_value_t = 65536)]
     length: usize,
+    /// Number of parallel data streams
+    #[arg(short = 'P', long, default_value_t = 1)]
+    parallel: u32,
     /// Reverse: server sends, client receives
     #[arg(short = 'R', long)]
     reverse: bool,
@@ -54,6 +57,7 @@ struct Params {
     dir: u8,
     secs: u64,
     block: u64,
+    parallel: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -228,17 +232,25 @@ async fn recv_all(sock: &TcpSocket, block: usize, fair: bool) -> StreamStats {
     }
 }
 
-/// Run the transfer for a negotiated role; return this end's per-stream stats.
-async fn run_data(sock: &TcpSocket, sending: bool, receiving: bool, block: usize, secs: u64) -> Vec<StreamStats> {
+/// Run the transfer for one connection's negotiated role; return its stream stats.
+/// `fair` yields per block so co-resident futures (bidir's two directions, or N
+/// parallel streams) interleave instead of starving each other.
+async fn run_data(sock: &TcpSocket, sending: bool, receiving: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
     match (sending, receiving) {
         (true, true) => {
-            let (tx, rx) = futures::join!(send_all(sock, block, secs, true), recv_all(sock, block, true));
+            let (tx, rx) = futures::join!(send_all(sock, block, secs, fair), recv_all(sock, block, fair));
             vec![tx, rx]
         }
-        (true, false) => vec![send_all(sock, block, secs, false).await],
-        (false, true) => vec![recv_all(sock, block, false).await],
+        (true, false) => vec![send_all(sock, block, secs, fair).await],
+        (false, true) => vec![recv_all(sock, block, fair).await],
         (false, false) => vec![],
     }
+}
+
+/// Drive N connections' transfers concurrently and flatten their stats.
+async fn run_streams(socks: &[TcpSocket], sending: bool, receiving: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
+    let futs = socks.iter().map(|s| run_data(s, sending, receiving, block, secs, fair));
+    futures::future::join_all(futs).await.into_iter().flatten().collect()
 }
 
 // ---- reporting (unified summary of both ends, like the p2 crate's ui) ------
@@ -253,13 +265,17 @@ fn humanize_bytes(b: u64) -> String {
     }
 }
 
-fn print_stream(who: &str, s: &StreamStats) {
+fn gbps(bytes: u64, secs: f64) -> f64 {
+    if secs > 0.0 { bytes as f64 * 8.0 / secs / 1e9 } else { 0.0 }
+}
+
+fn print_stream(who: &str, idx: usize, s: &StreamStats) {
     let secs = s.duration_millis as f64 / 1000.0;
-    let gbps = if secs > 0.0 { s.bytes_transferred as f64 * 8.0 / secs / 1e9 } else { 0.0 };
     let dir = if s.sender { "TX" } else { "RX" };
     println!(
-        "[{who} {dir}]  {}  in {secs:.3}s  ->  {gbps:.2} Gbits/sec",
-        humanize_bytes(s.bytes_transferred)
+        "[{who} {dir} #{idx}]  {}  in {secs:.3}s  ->  {:.2} Gbits/sec",
+        humanize_bytes(s.bytes_transferred),
+        gbps(s.bytes_transferred, secs)
     );
     if let Some(d) = &s.stall_ns {
         println!(
@@ -269,13 +285,32 @@ fn print_stream(who: &str, s: &StreamStats) {
     }
 }
 
+/// Aggregate throughput across a (side, direction) group: total bytes over the
+/// longest stream's duration.
+fn print_sum(who: &str, sender: bool, streams: &[StreamStats]) {
+    let grp: Vec<&StreamStats> = streams.iter().filter(|s| s.sender == sender).collect();
+    if grp.len() <= 1 {
+        return;
+    }
+    let bytes: u64 = grp.iter().map(|s| s.bytes_transferred).sum();
+    let secs = grp.iter().map(|s| s.duration_millis).max().unwrap_or(0) as f64 / 1000.0;
+    let dir = if sender { "TX" } else { "RX" };
+    println!(
+        "[{who} {dir} SUM] {}  in {secs:.3}s  ->  {:.2} Gbits/sec  ({} streams)",
+        humanize_bytes(bytes),
+        gbps(bytes, secs),
+        grp.len()
+    );
+}
+
 fn print_summary(local: &[StreamStats], remote: &[StreamStats]) {
     println!("- - - - - - - - - results (p3 native-async) - - - - - - - - -");
-    for s in local {
-        print_stream("client", s);
-    }
-    for s in remote {
-        print_stream("server", s);
+    for (side, streams) in [("client", local), ("server", remote)] {
+        for (i, s) in streams.iter().enumerate() {
+            print_stream(side, i, s);
+        }
+        print_sum(side, true, streams);
+        print_sum(side, false, streams);
     }
 }
 
@@ -308,11 +343,15 @@ impl Guest for Component {
             let ctrl = conns.next().await.ok_or(())?;
             let p: Params = recv_msg(&ctrl).await.ok_or(())?;
             let (sending, receiving) = roles(p.dir, true);
-            eprintln!("[p3perf] negotiated dir={} secs={} block={} (tx={sending} rx={receiving})", p.dir, p.secs, p.block);
+            let fair = p.dir == DIR_BIDIR || p.parallel > 1;
+            eprintln!("[p3perf] negotiated dir={} secs={} block={} P={} (tx={sending} rx={receiving})", p.dir, p.secs, p.block, p.parallel);
 
-            // Data connection: run the transfer, then send our results back.
-            let data = conns.next().await.ok_or(())?;
-            let local = run_data(&data, sending, receiving, p.block as usize, p.secs).await;
+            // Accept N data connections, run them concurrently, send results back.
+            let mut datas = Vec::with_capacity(p.parallel as usize);
+            for _ in 0..p.parallel {
+                datas.push(conns.next().await.ok_or(())?);
+            }
+            let local = run_streams(&datas, sending, receiving, p.block as usize, p.secs, fair).await;
             send_msg(&ctrl, &TestResults { streams: local }).await;
         } else {
             let host = o.client.clone().unwrap_or_else(|| "127.0.0.1".into());
@@ -322,13 +361,17 @@ impl Guest for Component {
 
             // Control connection: negotiate, keep open for the server's results.
             let ctrl = connect(addr, o.port).await?;
-            send_msg(&ctrl, &Params { dir, secs: o.time, block: o.length as u64 }).await;
+            send_msg(&ctrl, &Params { dir, secs: o.time, block: o.length as u64, parallel: o.parallel }).await;
 
-            // Data connection: run the transfer.
-            let data = connect(addr, o.port).await?;
+            // Open N data connections and run them concurrently.
+            let mut datas = Vec::with_capacity(o.parallel as usize);
+            for _ in 0..o.parallel {
+                datas.push(connect(addr, o.port).await?);
+            }
             let (sending, receiving) = roles(dir, false);
-            eprintln!("[p3perf] client {host}:{} dir={dir} (tx={sending} rx={receiving})", o.port);
-            let local = run_data(&data, sending, receiving, o.length, o.time).await;
+            let fair = dir == DIR_BIDIR || o.parallel > 1;
+            eprintln!("[p3perf] client {host}:{} dir={dir} P={} (tx={sending} rx={receiving})", o.port, o.parallel);
+            let local = run_streams(&datas, sending, receiving, o.length, o.time, fair).await;
 
             // Collect the server's results and print a unified summary.
             let remote: TestResults = recv_msg(&ctrl).await.unwrap_or_default();
