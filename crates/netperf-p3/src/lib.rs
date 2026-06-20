@@ -46,6 +46,9 @@ struct Opts {
     /// Bidirectional: both ends send and receive
     #[arg(long)]
     bidir: bool,
+    /// Measure write-stall latency (adds a clock read per block; off by default)
+    #[arg(short = 'L', long)]
+    latency: bool,
 }
 
 // ---- control protocol ------------------------------------------------------
@@ -63,6 +66,8 @@ struct Params {
     parallel: u32,
     /// Per-test cookie; each data connection must present it before transfer.
     cookie: u64,
+    /// Whether to collect write-stall latency (the sender side reads the clock per block).
+    measure_latency: bool,
 }
 
 fn direction_of(dir: u8) -> Direction {
@@ -135,16 +140,23 @@ async fn yield_now() {
 }
 
 /// The timed write loop on an existing stream; builds a sender StreamStats.
-async fn write_data(tx: &mut StreamWriter<u8>, block: usize, secs: u64, fair: bool) -> StreamStats {
+async fn write_data(tx: &mut StreamWriter<u8>, block: usize, secs: u64, fair: bool, measure: bool) -> StreamStats {
     let mut buf = vec![0u8; block];
     let mut total = 0u64;
-    let mut samples: Vec<u64> = Vec::with_capacity(4_000_000);
+    // Only allocate the sample buffer / read the clock per block when measuring;
+    // on wasip2 a clock read is a host-boundary call and taxes the small-block hot path.
+    let mut samples: Vec<u64> = if measure { Vec::with_capacity(4_000_000) } else { Vec::new() };
     let start = Instant::now();
     let dur = Duration::from_secs(secs);
     while start.elapsed() < dur {
-        let t0 = Instant::now();
-        let leftover = tx.write_all(buf).await;
-        samples.push(t0.elapsed().as_nanos() as u64);
+        let leftover = if measure {
+            let t0 = Instant::now();
+            let leftover = tx.write_all(buf).await;
+            samples.push(t0.elapsed().as_nanos() as u64);
+            leftover
+        } else {
+            tx.write_all(buf).await
+        };
         let wrote = block - leftover.len();
         total += wrote as u64;
         buf = if leftover.is_empty() { vec![0u8; block] } else { leftover };
@@ -160,7 +172,7 @@ async fn write_data(tx: &mut StreamWriter<u8>, block: usize, secs: u64, fair: bo
         duration_millis: start.elapsed().as_millis() as u64,
         bytes_transferred: total,
         syscalls: 0,
-        latency: Some(LatencyStats {
+        latency: measure.then(|| LatencyStats {
             interval_ns: Dist::from_samples(samples),
             throughput_bps: Dist::default(), // p3 doesn't track goodput windows
             clock_baseline_ns: 0,
@@ -199,12 +211,12 @@ async fn read_data(rx: &mut StreamReader<u8>, block: usize, fair: bool, init_tot
 }
 
 /// Plain data send on a fresh stream (used by the server when it is the data sender).
-async fn send_all(sock: &TcpSocket, block: usize, secs: u64, fair: bool) -> StreamStats {
+async fn send_all(sock: &TcpSocket, block: usize, secs: u64, fair: bool, measure: bool) -> StreamStats {
     let (mut tx, rx) = wit_stream::new::<u8>();
     let send_fut = sock.send(rx).await;
     let (s, ()) = futures::join!(
         async {
-            let s = write_data(&mut tx, block, secs, fair).await;
+            let s = write_data(&mut tx, block, secs, fair, measure).await;
             drop(tx);
             s
         },
@@ -224,7 +236,7 @@ async fn recv_all(sock: &TcpSocket, block: usize, fair: bool) -> StreamStats {
 /// Client side of a data connection: the client's send stream always carries the
 /// cookie first (then its data if it is the sender); it receives the server's data
 /// on the other half if it is the receiver.
-async fn client_conn(sock: &TcpSocket, cookie: [u8; COOKIE_LEN], send_data: bool, recv_data: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
+async fn client_conn(sock: &TcpSocket, cookie: [u8; COOKIE_LEN], send_data: bool, recv_data: bool, block: usize, secs: u64, fair: bool, measure: bool) -> Vec<StreamStats> {
     let (mut tx, rxs) = wit_stream::new::<u8>();
     let send_fut = sock.send(rxs).await;
     let mut out = Vec::new();
@@ -233,7 +245,7 @@ async fn client_conn(sock: &TcpSocket, cookie: [u8; COOKIE_LEN], send_data: bool
         // data loop ends (no early half-close), so throughput is unaffected.
         let sender = async {
             let _ = tx.write_all(cookie.to_vec()).await;
-            let s = write_data(&mut tx, block, secs, fair).await;
+            let s = write_data(&mut tx, block, secs, fair, measure).await;
             drop(tx);
             s
         };
@@ -280,7 +292,7 @@ async fn client_conn(sock: &TcpSocket, cookie: [u8; COOKIE_LEN], send_data: bool
 /// Server side of a data connection: validate the cookie at the head of the client's
 /// stream before counting any data; send its own data on the other half if it is the
 /// sender. Returns no stats (drops the connection) on cookie mismatch.
-async fn server_conn(sock: &TcpSocket, expected: [u8; COOKIE_LEN], recv_data: bool, send_data: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
+async fn server_conn(sock: &TcpSocket, expected: [u8; COOKIE_LEN], recv_data: bool, send_data: bool, block: usize, secs: u64, fair: bool, measure: bool) -> Vec<StreamStats> {
     let (mut rx, _done) = sock.receive().await;
     let mut acc: Vec<u8> = Vec::new();
     while acc.len() < COOKIE_LEN {
@@ -297,7 +309,7 @@ async fn server_conn(sock: &TcpSocket, expected: [u8; COOKIE_LEN], recv_data: bo
     let leftover = (acc.len() - COOKIE_LEN) as u64; // data bytes read alongside the cookie
     match (recv_data, send_data) {
         (true, true) => {
-            let (r, s) = futures::join!(read_data(&mut rx, block, fair, leftover), send_all(sock, block, secs, fair));
+            let (r, s) = futures::join!(read_data(&mut rx, block, fair, leftover), send_all(sock, block, secs, fair, measure));
             vec![s, r]
         }
         (true, false) => vec![read_data(&mut rx, block, fair, leftover).await],
@@ -305,18 +317,18 @@ async fn server_conn(sock: &TcpSocket, expected: [u8; COOKIE_LEN], recv_data: bo
             // Cookie-only inbound: close the receive half before sending so an idle
             // EOF stream doesn't throttle the outbound transfer.
             drop(rx);
-            vec![send_all(sock, block, secs, fair).await]
+            vec![send_all(sock, block, secs, fair, measure).await]
         }
         (false, false) => vec![],
     }
 }
 
-async fn run_streams(socks: &[TcpSocket], is_server: bool, cookie: [u8; COOKIE_LEN], sending: bool, receiving: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
+async fn run_streams(socks: &[TcpSocket], is_server: bool, cookie: [u8; COOKIE_LEN], sending: bool, receiving: bool, block: usize, secs: u64, fair: bool, measure: bool) -> Vec<StreamStats> {
     let futs = socks.iter().map(|s| async move {
         if is_server {
-            server_conn(s, cookie, receiving, sending, block, secs, fair).await
+            server_conn(s, cookie, receiving, sending, block, secs, fair, measure).await
         } else {
-            client_conn(s, cookie, sending, receiving, block, secs, fair).await
+            client_conn(s, cookie, sending, receiving, block, secs, fair, measure).await
         }
     });
     futures::future::join_all(futs).await.into_iter().flatten().collect()
@@ -364,7 +376,7 @@ impl Guest for Component {
                 datas.push(conns.next().await.ok_or(())?);
             }
             let cookie = p.cookie.to_le_bytes();
-            let local = run_streams(&datas, true, cookie, sending, receiving, p.block as usize, p.secs, fair).await;
+            let local = run_streams(&datas, true, cookie, sending, receiving, p.block as usize, p.secs, fair, p.measure_latency).await;
             send_msg(&ctrl, &to_results(local)).await;
         } else {
             let host = o.client.clone().unwrap_or_else(|| "127.0.0.1".into());
@@ -377,7 +389,7 @@ impl Guest for Component {
             let cookie = u64::from_le_bytes(cb);
 
             let ctrl = connect(addr, o.port).await?;
-            send_msg(&ctrl, &Params { dir, secs: o.time, block: o.length as u64, parallel: o.parallel, cookie }).await;
+            send_msg(&ctrl, &Params { dir, secs: o.time, block: o.length as u64, parallel: o.parallel, cookie, measure_latency: o.latency }).await;
 
             let mut datas = Vec::with_capacity(o.parallel as usize);
             for _ in 0..o.parallel {
@@ -386,11 +398,13 @@ impl Guest for Component {
             let (sending, receiving) = roles(dir, false);
             let fair = dir == DIR_BIDIR || o.parallel > 1;
             eprintln!("[p3perf] client {host}:{} dir={dir} P={} (tx={sending} rx={receiving})", o.port, o.parallel);
-            let local = to_results(run_streams(&datas, false, cb, sending, receiving, o.length, o.time, fair).await);
+            let local = to_results(run_streams(&datas, false, cb, sending, receiving, o.length, o.time, fair, o.latency).await);
 
             let remote: TestResults = recv_msg(&ctrl).await.unwrap_or_default();
             netperf_core::ui::print_summary(&local, &remote, &direction_of(dir));
-            netperf_core::ui::print_latency_summary(&local, &remote);
+            if o.latency {
+                netperf_core::ui::print_latency_summary(&local, &remote);
+            }
         }
         Ok(())
     }

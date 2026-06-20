@@ -99,6 +99,38 @@ wrong) and falls back to approximate names rather than producing silently-incorr
 (The generated `*.svg`, `*.folded`, `perf-*.map`, and `wasmtime*.json` artifacts embed
 local paths and are gitignored.)
 
+## Benchmark results: p2 vs p3
+
+Single-stream loopback (`127.0.0.1`), client-sender, throughput is the steady-state
+sender rate. Large-block rows are the median of 3 × 3-second trials (loopback throughput
+at these rates is noisy); small-block rows are op-rate bound and stable.
+
+| Block size | p2 (poll + tokio) | p3 (native async) | Winner |
+|---|---:|---:|---:|
+| 128 B (`-L` off) | ~756 Mbit/s (~738K ops/s) | ~756 Mbit/s (~738K ops/s) | **tie** |
+| 128 B (`-L` on)  | ~747 Mbit/s | ~625 Mbit/s | **p2** |
+| 64 KiB           | ~59 Gbit/s  | ~70 Gbit/s  | **p3** (+18%) |
+| 1 MiB            | ~58 Gbit/s  | ~105 Gbit/s | **p3** (~2×) |
+
+What this says:
+
+- **There is a crossover, set by block size.** At small blocks the two backends are
+  **tied** — both are operation-rate bound (~738K socket ops/sec on one core), and the
+  per-op cost of p3's async-stream/component-model machinery roughly equals p2's poll
+  loop. As blocks grow, p3 pulls away: the host pipes the `stream<u8>` to TCP in batched
+  copies instead of crossing the guest/host boundary per write, so its win scales with
+  block size (≈2× at 1 MiB).
+- **p3's latency instrumentation is expensive; p2's is nearly free.** Turning on `-L`
+  (a clock read per block) costs p2 ~1% but p3 ~17% at 128 B. On wasip2 a clock read is a
+  host-boundary call, and p3's per-block path is more sensitive to it. So *with latency
+  measurement on*, p2 wins the small-block regime — but that's an artifact of the
+  measurement, not the data plane. (`-L` is off by default on both.)
+
+**Machine / build (for reference):** Apple M1 Max, performance cores at 3.23 GHz
+(single-threaded — wasip2 has no threads, so one P-core), macOS; `wasmtime 45.0.2`,
+`wasm32-wasip2`. Loopback only — no NIC in the path. Absolute numbers are machine- and
+runtime-specific; the **p2-vs-p3 ratios** are the portable takeaway.
+
 ## CLI (both backends)
 
 `-s` server · `-c <HOST>` client · `-p <PORT>` · `-t <SECS>` duration ·
@@ -156,11 +188,11 @@ hundred Mbit/s. The Redis-relevant number is **ops/sec** (`MiB/s ÷ block size`)
 genuinely server-class on one core. (Throughput climbs to tens of Gbit/s as `-l` grows
 and per-op cost amortizes; ~64 KiB is the sweet spot before copy/buffer effects bite.)
 
-**p2 wins this regime, not p3.** Counterintuitively, the poll-based p2 backend beats the
-native-async p3 backend on small messages (~755 vs ~632 Mbit/s single-stream at 128 B),
-because p3's async-stream/component-model machinery costs more *per operation*. p3 only
-pulls ahead once blocks are large enough to amortize that — there's a crossover around
-tens of KiB. See `crates/netperf-p3/README.md` for the numbers.
+**Both backends are tied here — don't expect p3 to win.** On small messages p2 (poll) and
+p3 (native async) sustain the same ~756 Mbit/s / ~738K ops/sec: both are operation-rate
+bound and p3's async-stream machinery costs about as much per-op as p2's poll loop. p3
+only pulls ahead once blocks are large enough to amortize that (≈2× at 1 MiB). See the
+[Benchmark results](#benchmark-results-p2-vs-p3) section for the full table and caveats.
 
 Caveats: with no `TCP_NODELAY`, Nagle stays on, so small back-to-back writes may coalesce
 more than real Redis (which sets nodelay) — though on **loopback** Nagle rarely engages

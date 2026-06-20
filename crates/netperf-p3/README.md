@@ -21,6 +21,8 @@ difference between the two is the socket I/O backend (tokio `TcpStream` here vs
   - `-R, --reverse` — server sends, client receives.
   - `--bidir` — both ends send and receive.
   - `-P, --parallel <N>` — N parallel data streams.
+  - `-L, --latency` — collect write-stall percentiles (off by default; adds a
+    per-block clock read, so it costs throughput — see the note below).
 
   Only the **client** is configured. It opens a **control connection** first and
   sends the negotiated parameters (direction, duration, block size, cookie) as a
@@ -52,29 +54,30 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 ```
 
 ## Measured result (loopback, single stream)
-There is a **crossover** between the two backends, set by block size:
+There is a **crossover** between the two backends, set by block size (Apple M1 Max P-core
+@ 3.23 GHz, single-threaded, `wasmtime 45.0.2`; large-block rows are the median of 3
+trials):
 
 | Block size | p2 (poll + tokio) | p3 (native async) |
 |---|---:|---:|
-| 128 B   | ~755 Mbit/s (~738K ops/s) | ~632 Mbit/s (~617K ops/s) |
-| 64 KiB  | ~59 Gbit/s | ~65 Gbit/s |
+| 128 B (`-L` off) | ~756 Mbit/s | ~756 Mbit/s (tie) |
+| 64 KiB  | ~59 Gbit/s | ~70 Gbit/s (+18%) |
+| 1 MiB   | ~58 Gbit/s | ~105 Gbit/s (~2×) |
 
-- **Small blocks → p2 is faster.** Each write here threads through the async `stream<u8>`
-  state machine and the component-model async ABI, whose per-operation cost is *higher*
-  than p2's tight poll loop. At 128-byte granularity that overhead dominates, so the
-  native-async path is ~15–20% slower, not faster. (Both numbers above measure with
-  per-block latency timing on, since p3 always collects it — see below.)
-- **Large blocks → p3 is faster.** The host pipes the stream to TCP in batched copies
-  instead of crossing the guest/host boundary with a poll-readiness cycle per write, so
-  the per-op cost is amortized over a big payload and p3 pulls ahead.
+- **Small blocks → tied.** Both backends are operation-rate bound (~738K socket ops/sec
+  on one core); the per-op cost of p3's async `stream<u8>` state machine and the
+  component-model async ABI is about the same as p2's tight poll loop.
+- **Large blocks → p3 wins, and the win scales with block size.** The host pipes the
+  stream to TCP in batched copies instead of crossing the guest/host boundary with a
+  poll-readiness cycle per write, so the per-op cost is amortized over a big payload.
 
-The native-async win is therefore about *amortized batching at scale*, not lower per-op
-cost — so it does not help the small-message (e.g. Redis-like) regime.
+So the native-async win is about *amortized batching at scale*, not lower per-op cost — it
+does not help the small-message (e.g. Redis-like) regime, where the two tie.
 
-> Note: p3 currently measures write-stall latency on **every** block unconditionally
-> (there is no `-L` toggle), which adds a clock read per write. On wasip2 a clock read is
-> a host-boundary call, so at tiny block sizes this is a real tax; the p2 comparison above
-> is run with `-L` to match it.
+> Note: write-stall latency is now behind `-L` (off by default), matching p2. It is
+> comparatively expensive on p3 — enabling it costs ~17% at 128 B (vs ~1% on p2), because
+> the per-block clock read is a host-boundary call on wasip2 — so leave it off for
+> throughput runs.
 
 ## Status / limitations (prototype)
 - **Control protocol: client-driven, with results exchange.** Only the client is
