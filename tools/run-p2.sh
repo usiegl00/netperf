@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Convenience launcher: starts a netperf server under wasmtime, runs a client
-# against 127.0.0.1 with whatever flags you pass, then cleans up the server.
+# Convenience launcher for the p2 backend: starts a netperf-p2 server under the
+# wasmtime CLI, runs a client against 127.0.0.1 with whatever flags you pass, then
+# cleans up the server.
 #
 #   bash tools/run-p2.sh -t 10 -P 1 -L         # latency-under-load run
 #   bash tools/run-p2.sh -t 5 -P 4             # 4-stream throughput run

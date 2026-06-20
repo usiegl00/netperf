@@ -2,7 +2,7 @@
 # Re-symbolicate an existing dtrace capture (/tmp/p2-host.stacks) with
 # kernel symbols. Reuses the prior capture + perfmap; only the KASLR slide needs
 # root (one dtrace read). Run via the `!` prefix so you can type the password:
-#   ! bash tools/resymbolicate-kernel.sh
+#   ! bash tools/p2-resymbolicate-kernel.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

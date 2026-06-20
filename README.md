@@ -157,7 +157,7 @@ Debug Kit (KDK) for your build (`sw_vers -buildVersion`), then re-symbolicate th
 capture without re-running the workload:
 
 ```
-! bash tools/resymbolicate-kernel.sh             # reuses /tmp/p2-host.stacks -> p2-host-kernel.svg
+! bash tools/p2-resymbolicate-kernel.sh             # reuses /tmp/p2-host.stacks -> p2-host-kernel.svg
 ```
 
 It refuses a KDK whose build doesn't match the running kernel (the addresses would be

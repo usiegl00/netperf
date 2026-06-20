@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Combined kernel + host + wasm(guest) flamegraph for the netperf-p3 (WASI 0.3
-# native-async) sender. Unlike the p2 script this drives the custom embedding
+# native-async) sender. Unlike tools/p2-flamegraph.sh this drives the custom embedding
 # (netperf-p3-host), enabling its perfmap emitter (NETPERF_PERFMAP=1) so dtrace
 # can symbolicate JIT'd guest frames.
 #
