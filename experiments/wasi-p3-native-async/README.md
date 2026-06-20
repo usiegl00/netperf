@@ -49,10 +49,14 @@ poll-based tokio path — because the host pipes a stream to TCP in batched copi
 instead of crossing the guest/host boundary with a poll-readiness cycle per write.
 
 ## Status / limitations (prototype)
-- **Control protocol: client-driven.** Only the client is configured; direction,
-  duration, and block size are negotiated over the control connection (verified:
-  server runs with just `-s` for forward/reverse/bidir). It is one-way params only —
-  no results exchange back to the client yet (each end prints its own numbers).
+- **Control protocol: client-driven, with results exchange.** Only the client is
+  configured. It opens a control connection, sends the negotiated parameters
+  (direction/duration/block) and — after the transfer — receives the server's
+  `TestResults` back, then prints a **unified summary of both ends** (the same shape
+  as the p2 crate's `ui::print_summary`). Both messages are length-prefixed serde_json,
+  matching the p2 crate's control framing. Verified with the server given just `-s`:
+  forward/reverse/bidir all negotiate and report correctly (e.g. in reverse the client
+  prints the *server's* write-stall percentiles).
 - **Single data connection.** No `-P` parallel streams yet (the control/data split
   is in place to add it).
 - **`--bidir` is fair.** Earlier it suffered self-reinforcing starvation in the
