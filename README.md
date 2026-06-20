@@ -9,6 +9,28 @@ The two backends are intentionally divergent: they are different systems built o
 different I/O models, kept feature-equivalent so the *only* meaningful difference between
 a run on each is the socket layer.
 
+## Quickstart
+
+From a clone, all the way to a Redis-like load test (100 connections, 128-byte messages,
+both directions, 10 s) on the p2 backend:
+
+```bash
+# 1. prerequisites: wasm target + the wasmtime runtime
+rustup target add wasm32-wasip2
+curl https://wasmtime.dev/install.sh -sSf | bash   # or: brew install wasmtime
+
+# 2. build the p2 component
+cargo build -p netperf-p2 --release --target wasm32-wasip2
+
+# 3. run it (tools/run.sh starts a server, runs the client, cleans up)
+bash tools/run.sh -t 10 -P 100 -l 128 --bidir
+```
+
+This is op-rate bound, so expect a few hundred Mbit/s — that's ~0.8M small messages/sec,
+which is the Redis-relevant number, not the byte rate. See
+[Simulating a Redis-like workload](#simulating-a-redis-like-workload) for why, and
+[Benchmark results](#benchmark-results-p2-vs-p3) for the full p2-vs-p3 picture.
+
 ## Layout
 
 ```
