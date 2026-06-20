@@ -1,0 +1,5 @@
+package local:netperf-p3;
+world netperf {
+  import wasi:sockets/types@0.3.0-rc-2026-03-15;
+  export wasi:cli/run@0.3.0-rc-2026-03-15;
+}

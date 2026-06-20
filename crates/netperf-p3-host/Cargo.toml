@@ -1,0 +1,11 @@
+[package]
+name = "netperf-p3-host"
+version = "0.0.0"
+edition = "2024"
+description = "Minimal wasmtime embedding that runs the netperf-p3 WASI 0.3 component"
+
+[dependencies]
+wasmtime = "=45.0.2"
+wasmtime-wasi = { version = "=45.0.2", features = ["p3"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"

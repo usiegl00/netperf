@@ -1,20 +1,13 @@
 use crate::common::opts::ClientOpts;
 use serde::{Deserialize, Serialize};
 
+// Shared with the p3 build via the transport-agnostic core.
+pub use netperf_core::stats::Direction;
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Role {
     Server,
     Client,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub enum Direction {
-    /// Traffic flows from Client => Server (the default)
-    ClientToServer,
-    /// Traffic flows from Server => Client.
-    ServerToClient,
-    /// Both ways.
-    Bidirectional,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
@@ -27,8 +20,9 @@ pub struct TestParameters {
     pub parallel: u16,
     pub block_size: usize,
     pub client_version: String,
-    pub no_delay: bool,
     pub socket_buffers: Option<usize>,
+    /// Collect latency-under-load correlates (write-stall / arrival-gap / goodput windows).
+    pub measure_latency: bool,
 }
 
 impl TestParameters {
@@ -47,8 +41,8 @@ impl TestParameters {
             parallel: opts.parallel,
             block_size: opts.length.unwrap_or(default_block_size),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
-            no_delay: opts.no_delay,
             socket_buffers: opts.socket_buffers,
+            measure_latency: opts.latency,
         }
     }
 }

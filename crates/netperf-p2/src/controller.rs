@@ -112,6 +112,9 @@ impl TestController {
 
     fn print_results(&self, local: TestResults, remote: TestResults) {
         ui::print_summary(&local, &remote, &self.test.params.direction);
+        if self.test.params.measure_latency {
+            ui::print_latency_summary(&local, &remote);
+        }
     }
 
     async fn collect_test_result(&mut self) -> Result<TestResults> {

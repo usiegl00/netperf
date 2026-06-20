@@ -30,9 +30,9 @@ pub struct ClientOpts {
     /// Run in reverse mode (server sends, client receives)
     #[clap(short = 'R', long, group = "direction")]
     pub reverse: bool,
-    /// Set TCP no delay, disabling Nagle's Algorithm
-    #[clap(short = 'N', long)]
-    pub no_delay: bool,
+    /// Measure latency under load: percentiles for write-stall, inter-arrival gap, and goodput stability
+    #[clap(short = 'L', long)]
+    pub latency: bool,
 }
 
 #[derive(Debug, Collect, Clone, Parser)]

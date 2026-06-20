@@ -1,43 +1,15 @@
-[package]
-name = "netperf"
-version = "0.2.9"
-description = "A network performance measurement tool"
-authors = ["Ahmed Farghal <me@asoli.dev>"]
-edition = "2024"
-repository = "https://github.com/AhmedSoliman/netperf"
-license = "MIT OR Apache-2.0"
-keywords = ["network", "performance", "iperf3"]
-categories = ["command-line-utilities", "simulation"]
-readme = "README.md"
+# Virtual workspace for the WASI/wasm side: a shared core plus the two transports
+# (p2 / p3), all built for wasm32-wasip2. The native wasmtime host that *runs* the
+# p3 component is the one crate excluded — it targets the host, not wasm, so it
+# can't be built with `--target wasm32-wasip2` alongside these.
+[workspace]
+resolver = "2"
+members = ["crates/netperf-core", "crates/netperf-p2", "crates/netperf-p3"]
+exclude = ["crates/netperf-p3-host"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[dependencies]
-anyhow = "1"
-colored = "3.1"
-env_logger = "0.11.8"
-log = "0.4.17"
-nix = "0.31.3"
-bytes = "1.4.0"
-clap-verbosity-flag = "3.0.2"
-futures = "0.3.32"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0"
-cling = { version = "0.1" }
-tokio = { version = "1.52", features = [
-  "rt",
-  "rt-multi-thread",
-  "net",
-  "time",
-  "sync",
-  "macros",
-  "fs",
-  "io-util",
-] }
-uuid = { version = "1.23", default-features = false, features = ["v4"] }
-clap = { version = "4.6.1", features = ["color", "derive"] }
-
-[dev-dependencies]
-pretty_assertions = "1.3.0"
-tokio = { version = "1.52", features = ["test-util"] }
-tokio-stream = "0.1.17"
+# Build the p3 guest for speed: it's a throughput benchmark, and opt-level=3 is
+# ~12% faster than "s" in the small-block (per-op-bound) regime, neutral at large
+# blocks, for ~0.9% more wasm. Must live at the workspace root — Cargo ignores a
+# [profile.release] declared inside a non-root member crate.
+[profile.release.package.netperf-p3]
+opt-level = 3

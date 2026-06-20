@@ -17,21 +17,11 @@
 
 use crate::common::data::TestParameters;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use thiserror::Error;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct StreamStats {
-    pub sender: bool,
-    pub duration_millis: u64,
-    pub bytes_transferred: usize,
-    pub syscalls: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct TestResults {
-    pub streams: HashMap<usize, StreamStats>,
-}
+// Result/percentile types live in the transport-agnostic core so the p2 and p3
+// builds share one definition. Re-exported here to keep existing paths working.
+pub use netperf_core::stats::{Dist, LatencyStats, StreamStats, TestResults};
 
 /// Error messages set by server.
 #[derive(Serialize, Deserialize, Debug, Error, Eq, PartialEq)]

@@ -8,7 +8,7 @@ use crate::common::*;
 use crate::controller::{ControllerMessage, TestController};
 use anyhow::{anyhow, Context, Result};
 use log::{debug, error, info};
-use std::net::Ipv6Addr;
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::Sender;
@@ -16,9 +16,9 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 pub async fn run_server(common_opts: &CommonOpts) -> Result<()> {
-    // We use IPv6Addr::UNSPECIFIED here to listen on all
-    // IPv4 and IPv6 local interfaces. (dual stack)
-    let listener = TcpListener::bind((Ipv6Addr::UNSPECIFIED, common_opts.port)).await?;
+    // Bind to IPv4 0.0.0.0. wasm32-wasip2's `wasi:sockets` has no dual-stack
+    // (v4-mapped) support, so an IPv6 listener would not accept IPv4 clients.
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, common_opts.port)).await?;
     let port = common_opts.port;
     ui::print_server_banner(port);
     // Handles a single test instance
