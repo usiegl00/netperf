@@ -25,9 +25,12 @@ crates/
 tools/               run.sh, host-flamegraph.sh, kernel symbolication helpers.
 ```
 
-The wasm crates (`netperf-core`, `netperf-p2`) form a Cargo workspace at the repo root;
-the p3 guest and its native host build standalone (excluded from the workspace because
-they pin a specific wasmtime/WASI 0.3-rc toolchain).
+The three **wasm** crates (`netperf-core`, `netperf-p2`, `netperf-p3`) form one Cargo
+workspace at the repo root — `cargo build --target wasm32-wasip2` builds all of them, and
+each has the same `cargo build -p <name> --target wasm32-wasip2` shape. Only
+`netperf-p3-host` is excluded: it's the lone **native** crate (it runs the p3 component, so
+it can't be built for `wasm32-wasip2` alongside the others) and pins an exact wasmtime
+version, so it carries its own `Cargo.lock` and builds from its own directory.
 
 ## p2 — WASI Preview 2 + tokio
 
@@ -54,7 +57,7 @@ Needs the custom host (the `wasmtime` CLI does not link p3 sockets). See
 cargo build -p netperf-p3 --release --target wasm32-wasip2
 (cd crates/netperf-p3-host && cargo build --release)
 
-GUEST=crates/netperf-p3/target/wasm32-wasip2/release/netperf_p3.wasm
+GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
 HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -s &
 "$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 4

@@ -43,7 +43,7 @@ From the repo root:
 cargo build -p netperf-p3 --release --target wasm32-wasip2     # guest
 (cd crates/netperf-p3-host && cargo build --release)           # native host (wasmtime-wasi `p3`)
 
-GUEST=crates/netperf-p3/target/wasm32-wasip2/release/netperf_p3.wasm
+GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
 HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 
 # server takes no test flags — the client negotiates everything over the control connection

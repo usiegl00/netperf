@@ -1,10 +1,8 @@
-# Virtual workspace. Two transports over a shared core; the only difference between
-# the p2 and p3 builds is the socket I/O substrate.
+# Virtual workspace for the WASI/wasm side: a shared core plus the two transports
+# (p2 / p3), all built for wasm32-wasip2. The native wasmtime host that *runs* the
+# p3 component is the one crate excluded — it targets the host, not wasm, so it
+# can't be built with `--target wasm32-wasip2` alongside these.
 [workspace]
 resolver = "2"
-members = ["crates/netperf-core", "crates/netperf-p2"]
-
-# Built per-target rather than as default workspace members:
-#   crates/netperf-p3       — wasm-only component (cargo build --target wasm32-wasip2)
-#   crates/netperf-p3-host  — native wasmtime host that runs it (cargo build)
-exclude = ["crates/netperf-p3", "crates/netperf-p3-host"]
+members = ["crates/netperf-core", "crates/netperf-p2", "crates/netperf-p3"]
+exclude = ["crates/netperf-p3-host"]

@@ -16,13 +16,13 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 HOST=crates/netperf-p3-host/target/release/netperf-p3-host
-GUEST=crates/netperf-p3/target/wasm32-wasip2/release/netperf_p3.wasm
+GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
 INFERNO="$HOME/.cargo/bin/inferno-flamegraph"
 STACKS=/tmp/p3-host.stacks
 FOLDED=/tmp/p3-host.folded
 
 [ -x "$HOST" ]  || { echo "missing $HOST (cd crates/netperf-p3-host && cargo build --release)"; exit 1; }
-[ -f "$GUEST" ] || { echo "missing $GUEST (cd crates/netperf-p3 && cargo build --release --target wasm32-wasip2)"; exit 1; }
+[ -f "$GUEST" ] || { echo "missing $GUEST (cargo build -p netperf-p3 --release --target wasm32-wasip2)"; exit 1; }
 [ -x "$INFERNO" ] || { echo "inferno-flamegraph not found at $INFERNO (cargo install inferno)"; exit 1; }
 
 # Client flags to profile (default: small-block forward, the per-op-bound case).
