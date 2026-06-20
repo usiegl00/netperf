@@ -227,20 +227,52 @@ async fn recv_all(sock: &TcpSocket, block: usize, fair: bool) -> StreamStats {
 async fn client_conn(sock: &TcpSocket, cookie: [u8; COOKIE_LEN], send_data: bool, recv_data: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
     let (mut tx, rxs) = wit_stream::new::<u8>();
     let send_fut = sock.send(rxs).await;
-    let sender = async {
-        let _ = tx.write_all(cookie.to_vec()).await;
-        let s = if send_data { Some(write_data(&mut tx, block, secs, fair).await) } else { None };
-        drop(tx);
-        s
-    };
     let mut out = Vec::new();
-    if recv_data {
-        let (s, (), r) = futures::join!(sender, async { let _ = send_fut.await; }, recv_all(sock, block, fair));
-        out.extend(s);
+    if send_data {
+        // forward / bidir: cookie then data on this stream; it closes naturally when the
+        // data loop ends (no early half-close), so throughput is unaffected.
+        let sender = async {
+            let _ = tx.write_all(cookie.to_vec()).await;
+            let s = write_data(&mut tx, block, secs, fair).await;
+            drop(tx);
+            s
+        };
+        if recv_data {
+            let (s, (), r) = futures::join!(sender, async { let _ = send_fut.await; }, recv_all(sock, block, fair));
+            out.push(s);
+            out.push(r);
+        } else {
+            let (s, ()) = futures::join!(sender, async { let _ = send_fut.await; });
+            out.push(s);
+        }
+    } else if recv_data {
+        // reverse: the data flows server->client, so the cookie needs its own
+        // client->server stream. Keep that stream OPEN for the whole transfer — closing
+        // it early (half-close) throttles the server's send. The send side flushes the
+        // cookie then idles; we finish when the receive completes, then it closes.
+        let send_side = async {
+            futures::join!(
+                async {
+                    let _ = tx.write_all(cookie.to_vec()).await;
+                    std::future::pending::<()>().await;
+                },
+                async {
+                    let _ = send_fut.await;
+                }
+            );
+        };
+        let recv_side = recv_all(sock, block, fair);
+        futures::pin_mut!(send_side);
+        futures::pin_mut!(recv_side);
+        let r = match futures::future::select(recv_side, send_side).await {
+            futures::future::Either::Left((r, _)) => r,
+            futures::future::Either::Right((_, recv_side)) => recv_side.await,
+        };
         out.push(r);
     } else {
-        let (s, ()) = futures::join!(sender, async { let _ = send_fut.await; });
-        out.extend(s);
+        let _ = tx.write_all(cookie.to_vec()).await;
+        drop(tx);
+        let _ = send_fut.await;
     }
     out
 }

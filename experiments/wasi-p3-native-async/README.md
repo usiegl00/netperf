@@ -79,9 +79,8 @@ instead of crossing the guest/host boundary with a poll-readiness cycle per writ
   (in the negotiated params); each data connection presents it as the head of the
   client→server stream, and the server validates before counting any data (mismatch →
   the connection is dropped). For forward/bidir the cookie rides the existing data
-  stream, so throughput is unchanged (forward ~68, bidir ~47/dir, `-P 4` SUM ~62).
-  **Known cost — reverse:** the cookie needs a *separate* client→server stream (the
-  data flows the other way), and that second short-lived stream throttles the server's
-  send in the single-threaded executor — reverse drops from ~68 to ~31 Gbits/sec. A
-  fix (keeping that stream open instead of half-closing early, or coalescing the
-  cookie onto the control connection per stream) is left as a follow-up.
+  stream. In reverse the data flows the other way, so the cookie needs its own
+  client→server stream — which is kept **open for the whole transfer** (closing it
+  early half-closes the connection and throttles the server's send). All directions
+  run at full throughput with auth on: forward ~70, reverse ~68, bidir ~47/dir,
+  `-P 4` SUM ~61 Gbits/sec.
