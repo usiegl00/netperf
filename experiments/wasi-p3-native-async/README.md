@@ -5,6 +5,12 @@ sockets** (`wasi:sockets@0.3.x`) — no `std::net`, no tokio, and **no `wasi:io/
 on the data path**. It exists to A/B the native-async I/O model against the
 poll-based `wasm32-wasip2` + tokio build in the parent crate.
 
+It depends on the parent's **`netperf-core`** crate for the protocol/result types,
+percentile (`Dist`) computation, and the summary/latency reporting (`ui`). So those
+are literally shared with the p2 build, and the output is identical — the only real
+difference between the two is the socket I/O backend (tokio `TcpStream` here vs
+`wasi:sockets@0.3` streams).
+
 ## Layout
 - `p3echo/` — the guest. A `cdylib` built for `wasm32-wasip2` (auto-componentized),
   using `wit-bindgen`'s async codegen against WASI 0.3 sockets, with a netperf-style

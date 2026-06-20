@@ -1,7 +1,7 @@
-// WASI 0.3 native-async throughput/latency bench — no std::net, no tokio, and no
-// wasi:io/poll on the data path. netperf-style CLI, direction modes, a client-driven
-// control protocol, and results exchange — so the output mirrors the p2/tokio build;
-// the only real difference is the I/O substrate.
+// WASI 0.3 native-async throughput/latency bench. Same behavior as the p2/tokio
+// build — protocol/result types and reporting come from the shared `netperf-core`
+// crate; the only difference here is the I/O substrate (wasi:sockets@0.3 native
+// async — no std::net, no tokio, no wasi:io/poll on the data path).
 wit_bindgen::generate!({
     path: "wit",
     world: "echo",
@@ -11,6 +11,7 @@ wit_bindgen::generate!({
 
 use clap::Parser;
 use exports::wasi::cli::run::Guest;
+use netperf_core::stats::{Direction, Dist, LatencyStats, StreamStats, TestResults};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -47,7 +48,7 @@ struct Opts {
     bidir: bool,
 }
 
-// ---- protocol types (mirror the p2 crate's control.rs/data.rs) -------------
+// ---- control protocol ------------------------------------------------------
 const DIR_FORWARD: u8 = 0;
 const DIR_REVERSE: u8 = 1;
 const DIR_BIDIR: u8 = 2;
@@ -60,53 +61,24 @@ struct Params {
     parallel: u32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
-struct Dist {
-    count: u64,
-    min: u64,
-    p50: u64,
-    p90: u64,
-    p99: u64,
-    p100: u64,
-    mean: u64,
-}
-
-impl Dist {
-    fn from_samples(mut v: Vec<u64>) -> Self {
-        if v.is_empty() {
-            return Dist::default();
-        }
-        v.sort_unstable();
-        let n = v.len();
-        let pc = |p: u64| v[((p as usize * n).div_ceil(100)).saturating_sub(1).min(n - 1)];
-        let sum: u128 = v.iter().map(|&x| x as u128).sum();
-        Dist {
-            count: n as u64,
-            min: v[0],
-            p50: pc(50),
-            p90: pc(90),
-            p99: pc(99),
-            p100: v[n - 1],
-            mean: (sum / n as u128) as u64,
-        }
+fn direction_of(dir: u8) -> Direction {
+    match dir {
+        DIR_REVERSE => Direction::ServerToClient,
+        DIR_BIDIR => Direction::Bidirectional,
+        _ => Direction::ClientToServer,
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-struct StreamStats {
-    sender: bool,
-    duration_millis: u64,
-    bytes_transferred: u64,
-    /// write-stall percentiles (ns); only set for sender streams.
-    stall_ns: Option<Dist>,
+/// Map (direction, am-I-server) -> (sending, receiving).
+fn roles(dir: u8, server: bool) -> (bool, bool) {
+    match dir {
+        DIR_BIDIR => (true, true),
+        DIR_REVERSE => (server, !server),
+        _ => (!server, server),
+    }
 }
 
-#[derive(Serialize, Deserialize, Default)]
-struct TestResults {
-    streams: Vec<StreamStats>,
-}
-
-// ---- control framing: u32-LE length prefix + serde_json (one msg per dir) --
+// control framing: u32-LE length prefix + serde_json (one msg per direction).
 async fn send_msg<T: Serialize>(sock: &TcpSocket, msg: &T) {
     let json = serde_json::to_vec(msg).unwrap_or_default();
     let mut framed = (json.len() as u32).to_le_bytes().to_vec();
@@ -142,17 +114,8 @@ async fn recv_msg<T: DeserializeOwned>(sock: &TcpSocket) -> Option<T> {
     }
 }
 
-/// Map (direction, am-I-server) -> (sending, receiving).
-fn roles(dir: u8, server: bool) -> (bool, bool) {
-    match dir {
-        DIR_BIDIR => (true, true),
-        DIR_REVERSE => (server, !server),
-        _ => (!server, server),
-    }
-}
-
 // ---- data plane ------------------------------------------------------------
-/// Yield once so co-resident futures get a turn (bidir fairness).
+/// Yield once so co-resident futures get a turn (bidir / multi-stream fairness).
 async fn yield_now() {
     let mut yielded = false;
     std::future::poll_fn(move |cx| {
@@ -201,7 +164,13 @@ async fn send_all(sock: &TcpSocket, block: usize, secs: u64, fair: bool) -> Stre
         sender: true,
         duration_millis: elapsed.as_millis() as u64,
         bytes_transferred: total,
-        stall_ns: Some(Dist::from_samples(samples)),
+        syscalls: 0,
+        latency: Some(LatencyStats {
+            interval_ns: Dist::from_samples(samples),
+            throughput_bps: Dist::default(), // p3 doesn't track goodput windows
+            clock_baseline_ns: 0,
+            warmup_discarded: 0,
+        }),
     }
 }
 
@@ -228,13 +197,11 @@ async fn recv_all(sock: &TcpSocket, block: usize, fair: bool) -> StreamStats {
         sender: false,
         duration_millis: t0.elapsed().as_millis() as u64,
         bytes_transferred: total,
-        stall_ns: None,
+        syscalls: 0,
+        latency: None,
     }
 }
 
-/// Run the transfer for one connection's negotiated role; return its stream stats.
-/// `fair` yields per block so co-resident futures (bidir's two directions, or N
-/// parallel streams) interleave instead of starving each other.
 async fn run_data(sock: &TcpSocket, sending: bool, receiving: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
     match (sending, receiving) {
         (true, true) => {
@@ -247,70 +214,14 @@ async fn run_data(sock: &TcpSocket, sending: bool, receiving: bool, block: usize
     }
 }
 
-/// Drive N connections' transfers concurrently and flatten their stats.
 async fn run_streams(socks: &[TcpSocket], sending: bool, receiving: bool, block: usize, secs: u64, fair: bool) -> Vec<StreamStats> {
     let futs = socks.iter().map(|s| run_data(s, sending, receiving, block, secs, fair));
     futures::future::join_all(futs).await.into_iter().flatten().collect()
 }
 
-// ---- reporting (unified summary of both ends, like the p2 crate's ui) ------
-fn humanize_bytes(b: u64) -> String {
-    let f = b as f64;
-    if f < 1024.0 * 1024.0 {
-        format!("{:.2} KiB", f / 1024.0)
-    } else if f < 1024.0 * 1024.0 * 1024.0 {
-        format!("{:.2} MiB", f / 1024.0 / 1024.0)
-    } else {
-        format!("{:.2} GiB", f / 1024.0 / 1024.0 / 1024.0)
-    }
-}
-
-fn gbps(bytes: u64, secs: f64) -> f64 {
-    if secs > 0.0 { bytes as f64 * 8.0 / secs / 1e9 } else { 0.0 }
-}
-
-fn print_stream(who: &str, idx: usize, s: &StreamStats) {
-    let secs = s.duration_millis as f64 / 1000.0;
-    let dir = if s.sender { "TX" } else { "RX" };
-    println!(
-        "[{who} {dir} #{idx}]  {}  in {secs:.3}s  ->  {:.2} Gbits/sec",
-        humanize_bytes(s.bytes_transferred),
-        gbps(s.bytes_transferred, secs)
-    );
-    if let Some(d) = &s.stall_ns {
-        println!(
-            "          write-stall ns: n={} min={} p50={} p90={} p99={} p100={} mean={}",
-            d.count, d.min, d.p50, d.p90, d.p99, d.p100, d.mean
-        );
-    }
-}
-
-/// Aggregate throughput across a (side, direction) group: total bytes over the
-/// longest stream's duration.
-fn print_sum(who: &str, sender: bool, streams: &[StreamStats]) {
-    let grp: Vec<&StreamStats> = streams.iter().filter(|s| s.sender == sender).collect();
-    if grp.len() <= 1 {
-        return;
-    }
-    let bytes: u64 = grp.iter().map(|s| s.bytes_transferred).sum();
-    let secs = grp.iter().map(|s| s.duration_millis).max().unwrap_or(0) as f64 / 1000.0;
-    let dir = if sender { "TX" } else { "RX" };
-    println!(
-        "[{who} {dir} SUM] {}  in {secs:.3}s  ->  {:.2} Gbits/sec  ({} streams)",
-        humanize_bytes(bytes),
-        gbps(bytes, secs),
-        grp.len()
-    );
-}
-
-fn print_summary(local: &[StreamStats], remote: &[StreamStats]) {
-    println!("- - - - - - - - - results (p3 native-async) - - - - - - - - -");
-    for (side, streams) in [("client", local), ("server", remote)] {
-        for (i, s) in streams.iter().enumerate() {
-            print_stream(side, i, s);
-        }
-        print_sum(side, true, streams);
-        print_sum(side, false, streams);
+fn to_results(streams: Vec<StreamStats>) -> TestResults {
+    TestResults {
+        streams: streams.into_iter().enumerate().collect(),
     }
 }
 
@@ -339,31 +250,27 @@ impl Guest for Component {
             let mut conns = lsock.listen().await.map_err(|_| ())?;
             eprintln!("[p3perf] server listening on :{}", o.port);
 
-            // Control connection: read negotiated params; keep it open for results.
             let ctrl = conns.next().await.ok_or(())?;
             let p: Params = recv_msg(&ctrl).await.ok_or(())?;
             let (sending, receiving) = roles(p.dir, true);
             let fair = p.dir == DIR_BIDIR || p.parallel > 1;
             eprintln!("[p3perf] negotiated dir={} secs={} block={} P={} (tx={sending} rx={receiving})", p.dir, p.secs, p.block, p.parallel);
 
-            // Accept N data connections, run them concurrently, send results back.
             let mut datas = Vec::with_capacity(p.parallel as usize);
             for _ in 0..p.parallel {
                 datas.push(conns.next().await.ok_or(())?);
             }
             let local = run_streams(&datas, sending, receiving, p.block as usize, p.secs, fair).await;
-            send_msg(&ctrl, &TestResults { streams: local }).await;
+            send_msg(&ctrl, &to_results(local)).await;
         } else {
             let host = o.client.clone().unwrap_or_else(|| "127.0.0.1".into());
             let ip = Ipv4Addr::from_str(&host).map_err(|_| ())?.octets();
             let addr = (ip[0], ip[1], ip[2], ip[3]);
             let dir = if o.bidir { DIR_BIDIR } else if o.reverse { DIR_REVERSE } else { DIR_FORWARD };
 
-            // Control connection: negotiate, keep open for the server's results.
             let ctrl = connect(addr, o.port).await?;
             send_msg(&ctrl, &Params { dir, secs: o.time, block: o.length as u64, parallel: o.parallel }).await;
 
-            // Open N data connections and run them concurrently.
             let mut datas = Vec::with_capacity(o.parallel as usize);
             for _ in 0..o.parallel {
                 datas.push(connect(addr, o.port).await?);
@@ -371,11 +278,11 @@ impl Guest for Component {
             let (sending, receiving) = roles(dir, false);
             let fair = dir == DIR_BIDIR || o.parallel > 1;
             eprintln!("[p3perf] client {host}:{} dir={dir} P={} (tx={sending} rx={receiving})", o.port, o.parallel);
-            let local = run_streams(&datas, sending, receiving, o.length, o.time, fair).await;
+            let local = to_results(run_streams(&datas, sending, receiving, o.length, o.time, fair).await);
 
-            // Collect the server's results and print a unified summary.
             let remote: TestResults = recv_msg(&ctrl).await.unwrap_or_default();
-            print_summary(&local, &remote.streams);
+            netperf_core::ui::print_summary(&local, &remote, &direction_of(dir));
+            netperf_core::ui::print_latency_summary(&local, &remote);
         }
         Ok(())
     }

@@ -557,6 +557,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "log",
+ "netperf-core",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -564,6 +565,14 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "netperf-core"
+version = "0.1.0"
+dependencies = [
+ "colored",
+ "serde",
 ]
 
 [[package]]

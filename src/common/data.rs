@@ -1,20 +1,13 @@
 use crate::common::opts::ClientOpts;
 use serde::{Deserialize, Serialize};
 
+// Shared with the p3 build via the transport-agnostic core.
+pub use netperf_core::stats::Direction;
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Role {
     Server,
     Client,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub enum Direction {
-    /// Traffic flows from Client => Server (the default)
-    ClientToServer,
-    /// Traffic flows from Server => Client.
-    ServerToClient,
-    /// Both ways.
-    Bidirectional,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
