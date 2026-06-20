@@ -70,6 +70,13 @@ HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -c 127.0.0.1 -t 5 --bidir            # bidirectional
 ```
 
+Or use `tools/run-p3.sh` (the p3 analogue of `tools/run.sh`), which starts the server, runs
+the client, and cleans up:
+```
+bash tools/run-p3.sh -t 5 -l 2097152      # forward
+bash tools/run-p3.sh -t 5 --bidir         # bidirectional
+```
+
 ## Measured result (loopback, single stream)
 There is a **crossover** between the two backends, set by block size (Apple M1 Max P-core
 @ 3.23 GHz, single-threaded, `wasmtime 45.0.2`; large-block rows are the median of 3

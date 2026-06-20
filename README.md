@@ -28,11 +28,7 @@ bash tools/run.sh -t 10 -P 100 -l 128 --bidir
 # 4. build p3 (guest component + its native host) and run the same load
 cargo build -p netperf-p3 --release --target wasm32-wasip2
 (cd crates/netperf-p3-host && cargo build --release)
-HOST=crates/netperf-p3-host/target/release/netperf-p3-host
-GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
-"$HOST" "$GUEST" -s & sleep 1                          # server in the background
-"$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 100 -l 128 --bidir
-kill %1                                                # stop the server
+bash tools/run-p3.sh -t 10 -P 100 -l 128 --bidir
 ```
 
 This is op-rate bound, so expect a few hundred Mbit/s — that's ~0.8M small messages/sec,
@@ -110,6 +106,12 @@ GUEST=target/wasm32-wasip2/release/netperf_p3.wasm
 HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 "$HOST" "$GUEST" -s &
 "$HOST" "$GUEST" -c 127.0.0.1 -t 10 -P 4
+```
+
+Or use the launcher (the p3 analogue of `tools/run.sh` — starts a server, runs a client,
+cleans up):
+```
+bash tools/run-p3.sh -t 10 -P 4
 ```
 
 ## Profiling: full-stack flamegraphs
