@@ -8,7 +8,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-WASM=target/wasm32-wasip2/release/netperf.wasm
+WASM=target/wasm32-wasip2/release/netperf-p2.wasm
 DUR=10
 INFERNO="$HOME/.cargo/bin/inferno-flamegraph"
 STACKS=/tmp/wasmtime-host.stacks
@@ -17,9 +17,9 @@ OUT=wasmtime-host.svg
 
 command -v wasmtime >/dev/null || { echo "wasmtime not found"; exit 1; }
 [ -x "$INFERNO" ] || { echo "inferno-flamegraph not found at $INFERNO (cargo install inferno)"; exit 1; }
-[ -f "$WASM" ] || { echo "missing $WASM (cargo build --release --target wasm32-wasip2)"; exit 1; }
+[ -f "$WASM" ] || { echo "missing $WASM (cargo build -p netperf-p2 --release --target wasm32-wasip2)"; exit 1; }
 
-pkill -f netperf.wasm 2>/dev/null
+pkill -f netperf-p2.wasm 2>/dev/null
 sleep 1
 rm -f /tmp/perf-*.map 2>/dev/null   # best-effort; root-owned maps are skipped, newest is chosen below
 

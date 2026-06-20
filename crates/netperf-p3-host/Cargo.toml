@@ -1,7 +1,8 @@
 [package]
-name = "p3host"
+name = "netperf-p3-host"
 version = "0.0.0"
 edition = "2024"
+description = "Minimal wasmtime embedding that runs the netperf-p3 WASI 0.3 component"
 
 [dependencies]
 wasmtime = "=45.0.2"

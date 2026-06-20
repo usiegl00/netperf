@@ -8,10 +8,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-WASM=target/wasm32-wasip2/release/netperf.wasm
+WASM=target/wasm32-wasip2/release/netperf-p2.wasm
 WT=(wasmtime run -S inherit-network -S allow-ip-name-lookup "$WASM")
 
-[ -f "$WASM" ] || { echo "missing $WASM — run: cargo build --release --target wasm32-wasip2"; exit 1; }
+[ -f "$WASM" ] || { echo "missing $WASM — run: cargo build -p netperf-p2 --release --target wasm32-wasip2"; exit 1; }
 
 # Drop any server we previously started, then launch a fresh one in the background.
 pkill -f "$WASM -s" 2>/dev/null

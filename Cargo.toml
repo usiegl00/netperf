@@ -1,47 +1,10 @@
-[package]
-name = "netperf"
-version = "0.2.9"
-description = "A network performance measurement tool"
-authors = ["Ahmed Farghal <me@asoli.dev>"]
-edition = "2024"
-repository = "https://github.com/AhmedSoliman/netperf"
-license = "MIT OR Apache-2.0"
-keywords = ["network", "performance", "iperf3"]
-categories = ["command-line-utilities", "simulation"]
-readme = "README.md"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[dependencies]
-anyhow = "1"
-colored = "3.1"
-env_logger = "0.11.8"
-log = "0.4.17"
-bytes = "1.4.0"
-getrandom = "0.3"
-clap-verbosity-flag = "3.0.2"
-futures = "0.3.32"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0"
-cling = { version = "0.1" }
-tokio = { version = "1.52", features = [
-  "rt",
-  "net",
-  "time",
-  "sync",
-  "macros",
-  "io-util",
-] }
-uuid = { version = "1.23", default-features = false, features = ["v4"] }
-clap = { version = "4.6.1", features = ["color", "derive"] }
-netperf-core = { path = "netperf-core" }
-
-[dev-dependencies]
-pretty_assertions = "1.3.0"
-tokio = { version = "1.52", features = ["test-util"] }
-tokio-stream = "0.1.17"
-
+# Virtual workspace. Two transports over a shared core; the only difference between
+# the p2 and p3 builds is the socket I/O substrate.
 [workspace]
-members = ["netperf-core"]
-# The native-async experiments build for wasm with their own toolchain config.
-exclude = ["experiments"]
+resolver = "2"
+members = ["crates/netperf-core", "crates/netperf-p2"]
+
+# Built per-target rather than as default workspace members:
+#   crates/netperf-p3       — wasm-only component (cargo build --target wasm32-wasip2)
+#   crates/netperf-p3-host  — native wasmtime host that runs it (cargo build)
+exclude = ["crates/netperf-p3", "crates/netperf-p3-host"]

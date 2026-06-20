@@ -12,9 +12,9 @@ difference between the two is the socket I/O backend (tokio `TcpStream` here vs
 `wasi:sockets@0.3` streams).
 
 ## Layout
-- `p3echo/` — the guest. A `cdylib` built for `wasm32-wasip2` (auto-componentized),
-  using `wit-bindgen`'s async codegen against WASI 0.3 sockets, with a netperf-style
-  clap CLI:
+- `crates/netperf-p3/` (this crate) — the guest. A `cdylib` built for `wasm32-wasip2`
+  (auto-componentized), using `wit-bindgen`'s async codegen against WASI 0.3 sockets,
+  with a netperf-style clap CLI:
   - `-s, --server` — listen for one connection.
   - `-c, --client <HOST>` — connect to HOST.
   - `-p, --port`, `-t, --time <secs>`, `-l, --length <bytes>` (block size).
@@ -23,30 +23,32 @@ difference between the two is the socket I/O backend (tokio `TcpStream` here vs
   - `-P, --parallel <N>` — N parallel data streams.
 
   Only the **client** is configured. It opens a **control connection** first and
-  sends the negotiated parameters (direction, duration, block size) as a 17-byte
-  message; the server reads them and adapts its role. A second **data connection**
-  then carries the transfer (this split mirrors netperf and sets up `-P` later).
+  sends the negotiated parameters (direction, duration, block size, cookie) as a
+  length-prefixed serde_json message; the server reads them and adapts its role. The
+  **data connection(s)** then carry the transfer (this split mirrors netperf).
 
   - `wit/` is wasmtime's vendored WASI 0.3 WIT (must match the runtime's exact
     `0.3.x-rc` version; the published registry `0.3.0` does **not** match).
-- `p3host/` — a minimal embedding (~40 lines) that wires both `wasmtime_wasi::p2`
+- `crates/netperf-p3-host/` — a minimal embedding that wires both `wasmtime_wasi::p2`
   and `::p3` into the linker and runs a command component under
   `component_model_async`. The `wasmtime` CLI does not link p3 sockets for generic
-  commands, so a custom host is required.
+  commands, so a custom host is required. It is a **native** crate (excluded from the
+  wasm workspace), built with a plain `cargo build`.
 
 ## Build & run
+From the repo root:
 ```
-(cd p3echo && cargo build --release --target wasm32-wasip2)   # guest
-(cd p3host && cargo build --release)                          # host (wasmtime-wasi `p3` feature)
+cargo build -p netperf-p3 --release --target wasm32-wasip2     # guest
+(cd crates/netperf-p3-host && cargo build --release)           # native host (wasmtime-wasi `p3`)
 
-ECHO=p3echo/target/wasm32-wasip2/release/p3echo.wasm
-HOST=p3host/target/release/p3host
+GUEST=crates/netperf-p3/target/wasm32-wasip2/release/netperf_p3.wasm
+HOST=crates/netperf-p3-host/target/release/netperf-p3-host
 
 # server takes no test flags — the client negotiates everything over the control connection
-"$HOST" "$ECHO" -s &
-"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -l 2097152          # forward (client -> server)
-"$HOST" "$ECHO" -c 127.0.0.1 -t 5 -R                  # reverse (server -> client)
-"$HOST" "$ECHO" -c 127.0.0.1 -t 5 --bidir             # bidirectional
+"$HOST" "$GUEST" -s &
+"$HOST" "$GUEST" -c 127.0.0.1 -t 5 -l 2097152         # forward (client -> server)
+"$HOST" "$GUEST" -c 127.0.0.1 -t 5 -R                 # reverse (server -> client)
+"$HOST" "$GUEST" -c 127.0.0.1 -t 5 --bidir            # bidirectional
 ```
 
 ## Measured result (loopback, single stream)

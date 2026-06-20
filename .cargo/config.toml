@@ -1,7 +1,6 @@
-[build]
-target = "wasm32-wasip2"
-
 # Tokio gates its wasm32-wasip2 networking (TcpListener/TcpStream) behind the
-# `tokio_unstable` cfg. Without this, `net` fails to compile on the wasm target.
+# `tokio_unstable` cfg; this applies it whenever a crate is built for that target.
+# (No default `build.target` — the repo holds both wasm crates, built with
+#  `--target wasm32-wasip2`, and the native `netperf-p3-host`, built with `cargo build`.)
 [target.wasm32-wasip2]
 rustflags = ["--cfg", "tokio_unstable"]

@@ -1,5 +1,5 @@
 use cling::prelude::*;
-use netperf::common::opts::Opts;
+use netperf_p2::common::opts::Opts;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ClingFinished<Opts> {
